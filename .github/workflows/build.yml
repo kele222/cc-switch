@@ -1,27 +1,27 @@
-   name: Build Tauri App
-   on:
-     push:
-       branches: [ "main", "master" ] # 当推送到 main 或 master 分支时触发
-     workflow_dispatch: # 允许手动点击触发
+name: Build Tauri App
+on:
+  push:
+    branches: [ "main", "master" ] # 当推送到 main 或 master 分支时触发
+  workflow_dispatch: # 允许手动点击触发
 
-   jobs:
-     build-windows:
-       runs-on: windows-latest
-       steps:
-         - uses: actions/checkout@v4
-         
-         - name: Setup Node.js
-           uses: actions/setup-node@v4
-           with:
-             node-version: '20'
-             
-         - name: Install Rust
-           uses: dtolnay/rust-toolchain@stable
-           
-         - name: Install Frontend Dependencies
-           run: npm install
-           
-         - name: Build Tauri App
-           uses: tauri-apps/tauri-action@v0
-           env:
-             GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        
+      - name: Install Frontend Dependencies
+        run: npm install
+        
+      - name: Build Tauri App
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
