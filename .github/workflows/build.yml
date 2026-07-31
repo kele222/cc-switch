@@ -1,27 +1,58 @@
 name: Build Tauri App
+
 on:
   push:
-    branches: [ "main", "master" ] # 当推送到 main 或 master 分支时触发
-  workflow_dispatch: # 允许手动点击触发
+    branches: [ "main", "master" ]
+  workflow_dispatch: # 允许手动触发
 
 jobs:
   build-windows:
     runs-on: windows-latest
+    
     steps:
-      - uses: actions/checkout@v4
-      
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 1. 安装 Node.js (Tauri 推荐 Node 18+)
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          
-      - name: Install Rust
+
+      # 2. 显式安装 pnpm (关键！解决 pnpm 找不到的问题)
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 8 # 如果原仓库 package.json 指定了 pnpm 版本，请改成对应的，否则默认 8 或 9 即可
+
+      # 3. 使用 pnpm 安装前端依赖
+      - name: Install frontend dependencies
+        run: pnpm install
+
+      # 4. 安装 Rust 工具链
+      - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        
-      - name: Install Frontend Dependencies
-        run: npm install
-        
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      # 5. 缓存 Rust 依赖 (加速打包)
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      # 6. 执行 Tauri 打包
       - name: Build Tauri App
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          
+      # 7. 上传打包好的文件 (Artifacts)
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cc-switch-windows-exe
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/cc-switch.exe
