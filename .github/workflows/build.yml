@@ -1,4 +1,4 @@
-name: Build Tauri App (Debug Version)
+name: Build Tauri App (Final Fix)
 
 on:
   push:
@@ -23,35 +23,45 @@ jobs:
         with:
           version: 8 
 
-      - name: Install frontend dependencies and fix versions
-        run: |
-          # 1. 先正常安装依赖
-          pnpm install
-          # 2. 【关键修改】：加上 -w 参数，强制将依赖添加到 workspace 根目录
-          # 同时把前端 Tauri 依赖降级，使其与 Rust 后端版本 (2.10.x 和 2.6.x) 保持一致
-          pnpm add -w @tauri-apps/api@2.10.3 @tauri-apps/plugin-dialog@2.6.0
+      # 1. 正常安装前端依赖（不再强行修改 package.json）
+      - name: Install frontend dependencies
+        run: pnpm install
 
+      # 2. 安装 Rust 工具链
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
 
+      # 3. 【核心修复】：动态升级 Rust 后端依赖，使其与前端版本 (2.11.x 和 2.7.x) 匹配
+      - name: Upgrade Rust backend dependencies to match frontend
+        run: |
+          # 将 tauri 核心升级到 2.11.x
+          cargo add tauri@2.11 --manifest-path src-tauri/Cargo.toml
+          # 将 dialog 插件升级到 2.7.x
+          cargo add tauri-plugin-dialog@2.7 --manifest-path src-tauri/Cargo.toml
+          # 顺便把其他可能不匹配的 Tauri 插件也同步升级到对应的 major.minor 版本
+          cargo add tauri-plugin-log@2.8 --manifest-path src-tauri/Cargo.toml
+          cargo add tauri-plugin-process@2.3 --manifest-path src-tauri/Cargo.toml
+          cargo add tauri-plugin-updater@2.10 --manifest-path src-tauri/Cargo.toml
+
+      # 4. 缓存 Rust 依赖（加速打包）
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: './src-tauri -> target'
 
-      # 【关键修改】：不使用 tauri-action，直接运行命令，暴露真实报错
+      # 5. 构建前端
       - name: Build Frontend (Vite/React)
-        run: pnpm run build  
-        # 注：如果原仓库 package.json 里的 build 命令叫别的名字（如 build:web），请自行修改
+        run: pnpm run build || pnpm run build:web || pnpm run build:renderer
 
+      # 6. 构建 Tauri 后端并打包
       - name: Build Tauri Backend (Rust)
         run: pnpm tauri build
-        # 如果上面报错，说明是前端问题；如果这里报错，说明是 Rust 问题
 
+      # 7. 上传产物
       - name: Upload artifacts
-        if: success() # 只有成功才上传
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: cc-switch-windows-exe
