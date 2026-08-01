@@ -55,6 +55,10 @@ jobs:
       - name: Build Frontend (Vite/React)
         run: pnpm run build || pnpm run build:web || pnpm run build:renderer
 
+      # 【新增步骤】：在打包前，用 Node.js 自动删掉配置文件里的公钥，并禁用自动更新
+      - name: Disable updater signature to bypass private key error
+        run: node -e "const fs=require('fs'); const p='src-tauri/tauri.conf.json'; const c=JSON.parse(fs.readFileSync(p)); if(c.bundle && c.bundle.updater){ delete c.bundle.updater.pubkey; c.bundle.updater.active=false; } fs.writeFileSync(p, JSON.stringify(c, null, 2));"
+
       # 6. 构建 Tauri 后端并打包
       - name: Build Tauri Backend (Rust)
         run: pnpm tauri build
