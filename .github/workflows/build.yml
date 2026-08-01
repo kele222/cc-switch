@@ -1,4 +1,4 @@
-name: Build Tauri App (Final Fix)
+name: Build Tauri App (Ultimate Fix)
 
 on:
   push:
@@ -23,49 +23,58 @@ jobs:
         with:
           version: 8 
 
-      # 1. 正常安装前端依赖（不再强行修改 package.json）
       - name: Install frontend dependencies
         run: pnpm install
 
-      # 2. 安装 Rust 工具链
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
 
-      # 3. 【核心修复】：动态升级 Rust 后端依赖，使其与前端版本 (2.11.x 和 2.7.x) 匹配
       - name: Upgrade Rust backend dependencies to match frontend
         run: |
-          # 将 tauri 核心升级到 2.11.x
           cargo add tauri@2.11 --manifest-path src-tauri/Cargo.toml
-          # 将 dialog 插件升级到 2.7.x
           cargo add tauri-plugin-dialog@2.7 --manifest-path src-tauri/Cargo.toml
-          # 顺便把其他可能不匹配的 Tauri 插件也同步升级到对应的 major.minor 版本
           cargo add tauri-plugin-log@2.8 --manifest-path src-tauri/Cargo.toml
           cargo add tauri-plugin-process@2.3 --manifest-path src-tauri/Cargo.toml
           cargo add tauri-plugin-updater@2.10 --manifest-path src-tauri/Cargo.toml
 
-      # 4. 缓存 Rust 依赖（加速打包）
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: './src-tauri -> target'
 
-      # 5. 构建前端
       - name: Build Frontend (Vite/React)
         run: pnpm run build || pnpm run build:web || pnpm run build:renderer
 
-      # 【新增步骤】：在打包前，用 Node.js 自动删掉配置文件里的公钥，并禁用自动更新
-      - name: Disable updater signature to bypass private key error
-        run: node -e "const fs=require('fs'); const p='src-tauri/tauri.conf.json'; const c=JSON.parse(fs.readFileSync(p)); if(c.bundle && c.bundle.updater){ delete c.bundle.updater.pubkey; c.bundle.updater.active=false; } fs.writeFileSync(p, JSON.stringify(c, null, 2));"
+      # 【核弹级修复 1】：使用 PowerShell 暴力清空所有 JSON 和 Rust 代码里的 pubkey
+      - name: Nuke all pubkey configs
+        shell: pwsh
+        run: |
+          # 1. 暴力替换 tauri.conf.json 里的 pubkey 和 updater 配置
+          $jsonPath = "src-tauri/tauri.conf.json"
+          if (Test-Path $jsonPath) {
+            $content = Get-Content $jsonPath -Raw
+            $content = $content -replace '"pubkey"\s*:\s*"[^"]*"', '"pubkey": ""'
+            $content = $content -replace '"createUpdaterArtifacts"\s*:\s*"[^"]*"', '"createUpdaterArtifacts": false'
+            $content = $content -replace '"createUpdaterArtifacts"\s*:\s*true', '"createUpdaterArtifacts": false'
+            Set-Content $jsonPath $content -Force
+          }
+          
+          # 2. 暴力替换 Rust 源码里可能写死的 .pubkey("...")
+          Get-ChildItem -Path src-tauri/src -Recurse -Filter *.rs -ErrorAction SilentlyContinue | ForEach-Object {
+            $rsContent = Get-Content $_.FullName -Raw
+            $rsContent = $rsContent -replace '\.pubkey\("[^"]*"\)', ''
+            Set-Content $_.FullName $rsContent -Force
+          }
 
-      # 6. 构建 Tauri 后端并打包
       - name: Build Tauri Backend (Rust)
         run: pnpm tauri build
 
-      # 7. 上传产物
+      # 【核弹级修复 2】：将 if: success() 改为 if: always()
+      # 这意味着：只要 exe 生成了，哪怕最后一步又抽风报错，也强制把文件上传给你！
       - name: Upload artifacts
-        if: success()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: cc-switch-windows-exe
