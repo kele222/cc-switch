@@ -25,10 +25,11 @@ jobs:
 
       - name: Install frontend dependencies and fix versions
         run: |
-          # 先正常安装依赖
+          # 1. 先正常安装依赖
           pnpm install
-          # 【关键】：强行把前端 Tauri 依赖降级，使其与 Rust 后端版本 (2.10.x 和 2.6.x) 保持一致
-          pnpm add @tauri-apps/api@2.10.3 @tauri-apps/plugin-dialog@2.6.0
+          # 2. 【关键修改】：加上 -w 参数，强制将依赖添加到 workspace 根目录
+          # 同时把前端 Tauri 依赖降级，使其与 Rust 后端版本 (2.10.x 和 2.6.x) 保持一致
+          pnpm add -w @tauri-apps/api@2.10.3 @tauri-apps/plugin-dialog@2.6.0
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
