@@ -27,6 +27,16 @@ fn openai_cache_write_tokens(usage: &Value) -> u32 {
         .unwrap_or(0) as u32
 }
 
+fn reasoning_tokens(usage: &Value) -> u32 {
+    usage
+        .pointer("/output_tokens_details/reasoning_tokens")
+        .or_else(|| usage.pointer("/completion_tokens_details/reasoning_tokens"))
+        .or_else(|| usage.pointer("/output_tokens_details/thinking_tokens"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        .min(u32::MAX as u64) as u32
+}
+
 /// Session 日志 request_id 前缀，与 `session_usage.rs` 中的格式保持一致
 pub const SESSION_REQUEST_ID_PREFIX: &str = "session:";
 
@@ -52,6 +62,8 @@ fn response_id(body: &Value, field: &str) -> Option<String> {
 pub struct TokenUsage {
     pub input_tokens: u32,
     pub output_tokens: u32,
+    #[serde(default)]
+    pub reasoning_tokens: u32,
     pub cache_read_tokens: u32,
     pub cache_creation_tokens: u32,
     /// 从响应中提取的实际模型名称（如果可用）
@@ -87,6 +99,7 @@ impl TokenUsage {
     pub fn has_billable_tokens(&self) -> bool {
         self.input_tokens > 0
             || self.output_tokens > 0
+            || self.reasoning_tokens > 0
             || self.cache_read_tokens > 0
             || self.cache_creation_tokens > 0
     }
@@ -106,6 +119,7 @@ impl TokenUsage {
         Some(Self {
             input_tokens: usage.get("input_tokens")?.as_u64()? as u32,
             output_tokens: usage.get("output_tokens")?.as_u64()? as u32,
+            reasoning_tokens: reasoning_tokens(usage),
             cache_read_tokens: usage
                 .get("cache_read_input_tokens")
                 .and_then(|v| v.as_u64())
@@ -160,6 +174,7 @@ impl TokenUsage {
                                 .and_then(|v| v.as_u64())
                                 .unwrap_or(0)
                                 as u32;
+                            usage.reasoning_tokens = reasoning_tokens(msg_usage);
                         }
                     }
                     "message_delta" => {
@@ -169,6 +184,10 @@ impl TokenUsage {
                                 delta_usage.get("output_tokens").and_then(|v| v.as_u64())
                             {
                                 usage.output_tokens = output as u32;
+                            }
+                            let delta_reasoning = reasoning_tokens(delta_usage);
+                            if delta_reasoning > 0 {
+                                usage.reasoning_tokens = delta_reasoning;
                             }
 
                             let delta_input = delta_usage
@@ -270,6 +289,7 @@ impl TokenUsage {
         Some(Self {
             input_tokens: input_tokens? as u32,
             output_tokens: output_tokens? as u32,
+            reasoning_tokens: reasoning_tokens(usage),
             cache_read_tokens: cached_tokens,
             cache_creation_tokens: cache_write_tokens,
             model,
@@ -343,6 +363,7 @@ impl TokenUsage {
         Some(Self {
             input_tokens: prompt_tokens as u32,
             output_tokens: completion_tokens as u32,
+            reasoning_tokens: reasoning_tokens(usage),
             cache_read_tokens: cached_tokens,
             cache_creation_tokens: cache_write_tokens,
             model,
@@ -390,6 +411,11 @@ impl TokenUsage {
         Some(Self {
             input_tokens: prompt_tokens,
             output_tokens,
+            reasoning_tokens: usage
+                .get("thoughtsTokenCount")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                .min(u32::MAX as u64) as u32,
             cache_read_tokens: usage
                 .get("cachedContentTokenCount")
                 .and_then(|v| v.as_u64())
@@ -406,6 +432,7 @@ impl TokenUsage {
         let mut total_input = 0u32;
         let mut total_tokens = 0u32;
         let mut total_cache_read = 0u32;
+        let mut total_reasoning = 0u32;
         let mut model: Option<String> = None;
         let mut message_id: Option<String> = None;
 
@@ -428,6 +455,12 @@ impl TokenUsage {
                     .get("cachedContentTokenCount")
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0) as u32;
+
+                total_reasoning = usage
+                    .get("thoughtsTokenCount")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+                    .min(u32::MAX as u64) as u32;
             }
 
             // 提取实际使用的模型名称（modelVersion 字段）
@@ -448,6 +481,7 @@ impl TokenUsage {
             Some(Self {
                 input_tokens: total_input,
                 output_tokens: total_output,
+                reasoning_tokens: total_reasoning,
                 cache_read_tokens: total_cache_read,
                 cache_creation_tokens: 0,
                 model,
@@ -718,6 +752,7 @@ mod tests {
         assert_eq!(usage.input_tokens, 8383);
         // output_tokens = totalTokenCount - promptTokenCount = 8547 - 8383 = 164
         assert_eq!(usage.output_tokens, 164);
+        assert_eq!(usage.reasoning_tokens, 114);
         assert_eq!(usage.cache_read_tokens, 20);
         assert_eq!(usage.cache_creation_tokens, 0);
         assert_eq!(usage.model, Some("gemini-3-pro-high".to_string()));
@@ -777,6 +812,7 @@ mod tests {
         // output_tokens = totalTokenCount - promptTokenCount
         // = 8547 - 8383 = 164 (包含 candidatesTokenCount 50 + thoughtsTokenCount 114)
         assert_eq!(usage.output_tokens, 164);
+        assert_eq!(usage.reasoning_tokens, 114);
         assert_eq!(usage.cache_read_tokens, 0);
         assert_eq!(usage.cache_creation_tokens, 0);
         assert_eq!(usage.model, Some("gemini-3-pro-high".to_string()));
@@ -788,6 +824,9 @@ mod tests {
             "usage": {
                 "input_tokens": 1000,
                 "output_tokens": 500,
+                "output_tokens_details": {
+                    "reasoning_tokens": 123
+                },
                 "input_tokens_details": {
                     "cached_tokens": 300
                 }
@@ -798,6 +837,7 @@ mod tests {
         // 非调整模式：input_tokens 保持原值，但应记录缓存命中
         assert_eq!(usage.input_tokens, 1000);
         assert_eq!(usage.output_tokens, 500);
+        assert_eq!(usage.reasoning_tokens, 123);
         assert_eq!(usage.cache_read_tokens, 300);
     }
 
@@ -1004,6 +1044,9 @@ mod tests {
             "usage": {
                 "prompt_tokens": 1000,
                 "completion_tokens": 500,
+                "completion_tokens_details": {
+                    "reasoning_tokens": 234
+                },
                 "prompt_tokens_details": {
                     "cached_tokens": 200
                 }
@@ -1013,6 +1056,7 @@ mod tests {
         let usage = TokenUsage::from_codex_response_auto(&response).unwrap();
         assert_eq!(usage.input_tokens, 1000);
         assert_eq!(usage.output_tokens, 500);
+        assert_eq!(usage.reasoning_tokens, 234);
         assert_eq!(usage.cache_read_tokens, 200);
         assert_eq!(usage.model, Some("gpt-4o".to_string()));
     }
@@ -1025,6 +1069,9 @@ mod tests {
             "usage": {
                 "input_tokens": 1000,
                 "output_tokens": 500,
+                "output_tokens_details": {
+                    "reasoning_tokens": 345
+                },
                 "input_tokens_details": {
                     "cached_tokens": 300
                 }
@@ -1035,6 +1082,7 @@ mod tests {
         // 记录原始 input_tokens，不调整
         assert_eq!(usage.input_tokens, 1000);
         assert_eq!(usage.output_tokens, 500);
+        assert_eq!(usage.reasoning_tokens, 345);
         assert_eq!(usage.cache_read_tokens, 300);
         assert_eq!(usage.model, Some("o3".to_string()));
     }

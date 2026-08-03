@@ -3,6 +3,7 @@
 export interface TokenUsage {
   inputTokens: number;
   outputTokens: number;
+  reasoningTokens: number;
   cacheReadTokens: number;
   cacheCreationTokens: number;
 }
@@ -19,6 +20,7 @@ export interface RequestLog {
   costMultiplier: string;
   inputTokens: number;
   outputTokens: number;
+  reasoningTokens: number;
   cacheReadTokens: number;
   cacheCreationTokens: number;
   inputCostUsd: string;

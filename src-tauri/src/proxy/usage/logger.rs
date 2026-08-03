@@ -169,12 +169,12 @@ impl<'a> UsageLogger<'a> {
         let sql = format!(
             "{insert_verb} INTO proxy_request_logs (
                 request_id, provider_id, app_type, model, request_model, pricing_model,
-                input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+                input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cache_creation_tokens,
                 input_token_semantics,
                 input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd,
                 latency_ms, first_token_ms, status_code, error_message, session_id,
                 provider_type, is_streaming, cost_multiplier, created_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)"
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)"
         );
         let affected_rows = conn
             .execute(
@@ -188,6 +188,7 @@ impl<'a> UsageLogger<'a> {
                     log.pricing_model,
                     log.usage.input_tokens,
                     log.usage.output_tokens,
+                    log.usage.reasoning_tokens,
                     log.usage.cache_read_tokens,
                     log.usage.cache_creation_tokens,
                     input_token_semantics,
@@ -516,6 +517,7 @@ mod tests {
             usage: TokenUsage {
                 input_tokens,
                 output_tokens: 5,
+                reasoning_tokens: 0,
                 cache_read_tokens: 2,
                 cache_creation_tokens: 0,
                 model: None,
@@ -553,6 +555,7 @@ mod tests {
         let usage = TokenUsage {
             input_tokens: 1000,
             output_tokens: 500,
+            reasoning_tokens: 125,
             cache_read_tokens: 0,
             cache_creation_tokens: 0,
             model: None,
@@ -578,15 +581,16 @@ mod tests {
 
         // 验证记录已插入
         let conn = crate::database::lock_conn!(db.conn);
-        let (count, request_model): (i64, String) = conn
+        let (count, request_model, reasoning_tokens): (i64, String, i64) = conn
             .query_row(
-                "SELECT COUNT(*), request_model FROM proxy_request_logs WHERE request_id = 'req-123'",
+                "SELECT COUNT(*), request_model, reasoning_tokens FROM proxy_request_logs WHERE request_id = 'req-123'",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .unwrap();
         assert_eq!(count, 1);
         assert_eq!(request_model, "req-model");
+        assert_eq!(reasoning_tokens, 125);
         Ok(())
     }
 
@@ -706,6 +710,7 @@ mod tests {
         let usage = TokenUsage {
             input_tokens: 10,
             output_tokens: 5,
+            reasoning_tokens: 0,
             cache_read_tokens: 2,
             cache_creation_tokens: 1,
             model: Some("claude-sonnet-4-5".to_string()),

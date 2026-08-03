@@ -183,6 +183,14 @@ export function RequestDetailPanel({
               </div>
               <div>
                 <dt className="text-muted-foreground">
+                  {t("usage.reasoningTokens")}
+                </dt>
+                <dd className="font-mono">
+                  {request.reasoningTokens.toLocaleString()}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-muted-foreground">
                   {t("usage.cacheReadTokens", "缓存读取")}
                 </dt>
                 <dd className="font-mono">

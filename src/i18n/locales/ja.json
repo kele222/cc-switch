@@ -1488,6 +1488,7 @@
     "billingModel": "課金モデル",
     "inputTokens": "入力",
     "outputTokens": "出力",
+    "reasoningTokens": "推論",
     "cacheReadTokens": "キャッシュヒット",
     "cacheCreationTokens": "キャッシュ作成",
     "timingInfo": "応答時間/TTFT",

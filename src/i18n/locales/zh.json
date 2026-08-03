@@ -1488,6 +1488,7 @@
     "billingModel": "计费模型",
     "inputTokens": "输入",
     "outputTokens": "输出",
+    "reasoningTokens": "推理",
     "cacheReadTokens": "缓存命中",
     "cacheCreationTokens": "缓存创建",
     "timingInfo": "用时/首字",

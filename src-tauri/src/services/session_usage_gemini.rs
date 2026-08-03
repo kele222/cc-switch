@@ -270,6 +270,7 @@ fn insert_gemini_session_entry(
     let usage = TokenUsage {
         input_tokens: tokens.input,
         output_tokens,
+        reasoning_tokens: tokens.thoughts,
         cache_read_tokens: tokens.cached,
         cache_creation_tokens: 0,
         model: Some(model.to_string()),
@@ -303,15 +304,16 @@ fn insert_gemini_session_entry(
     conn.execute(
         "INSERT INTO proxy_request_logs (
             request_id, provider_id, app_type, model, request_model,
-            input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+            input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cache_creation_tokens,
             input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd,
             latency_ms, first_token_ms, status_code, error_message, session_id,
             provider_type, is_streaming, cost_multiplier, created_at, data_source
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
         ON CONFLICT(request_id) DO UPDATE SET
             model = excluded.model,
             input_tokens = excluded.input_tokens,
             output_tokens = excluded.output_tokens,
+            reasoning_tokens = excluded.reasoning_tokens,
             cache_read_tokens = excluded.cache_read_tokens,
             input_cost_usd = excluded.input_cost_usd,
             output_cost_usd = excluded.output_cost_usd,
@@ -320,6 +322,7 @@ fn insert_gemini_session_entry(
             total_cost_usd = excluded.total_cost_usd
         WHERE input_tokens != excluded.input_tokens
            OR output_tokens != excluded.output_tokens
+           OR reasoning_tokens != excluded.reasoning_tokens
            OR cache_read_tokens != excluded.cache_read_tokens
            OR model != excluded.model",
         rusqlite::params![
@@ -330,6 +333,7 @@ fn insert_gemini_session_entry(
             model,               // request_model = model
             tokens.input,
             output_tokens,
+            tokens.thoughts,
             tokens.cached,
             0i64,                // cache_creation_tokens
             input_cost,

@@ -49,6 +49,7 @@ struct CumulativeTokens {
     input: u64,
     cached_input: u64,
     output: u64,
+    reasoning_output: u64,
 }
 
 /// 单次 API 调用的 token 增量
@@ -57,11 +58,15 @@ struct DeltaTokens {
     input: u32,
     cached_input: u32,
     output: u32,
+    reasoning_output: u32,
 }
 
 impl DeltaTokens {
     fn is_zero(&self) -> bool {
-        self.input == 0 && self.cached_input == 0 && self.output == 0
+        self.input == 0
+            && self.cached_input == 0
+            && self.output == 0
+            && self.reasoning_output == 0
     }
 }
 
@@ -547,11 +552,15 @@ fn compute_delta(prev: &Option<CumulativeTokens>, current: &CumulativeTokens) ->
             input: current.input as u32,
             cached_input: current.cached_input as u32,
             output: current.output as u32,
+            reasoning_output: current.reasoning_output as u32,
         },
         Some(p) => DeltaTokens {
             input: current.input.saturating_sub(p.input) as u32,
             cached_input: current.cached_input.saturating_sub(p.cached_input) as u32,
             output: current.output.saturating_sub(p.output) as u32,
+            reasoning_output: current
+                .reasoning_output
+                .saturating_sub(p.reasoning_output) as u32,
         },
     }
 }
@@ -573,6 +582,10 @@ fn parse_cumulative_tokens(total_usage: &serde_json::Value) -> Option<Cumulative
             .unwrap_or(0),
         output: total_usage
             .get("output_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0),
+        reasoning_output: total_usage
+            .get("reasoning_output_tokens")
             .and_then(|v| v.as_u64())
             .unwrap_or(0),
     })
@@ -829,6 +842,7 @@ fn parse_codex_file(
                         input: cumulative.input as u32,
                         cached_input: cumulative.cached_input as u32,
                         output: cumulative.output as u32,
+                        reasoning_output: cumulative.reasoning_output as u32,
                     }
                 };
                 let delta = DeltaTokens {
@@ -1261,6 +1275,7 @@ fn insert_codex_session_entry(
     let usage = TokenUsage {
         input_tokens: delta.input,
         output_tokens: delta.output,
+        reasoning_tokens: delta.reasoning_output,
         cache_read_tokens: delta.cached_input,
         cache_creation_tokens: 0,
         model: Some(model.to_string()),
@@ -1294,11 +1309,11 @@ fn insert_codex_session_entry(
         .execute(
             "INSERT OR IGNORE INTO proxy_request_logs (
             request_id, provider_id, app_type, model, request_model,
-            input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+            input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cache_creation_tokens,
             input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd,
             latency_ms, first_token_ms, status_code, error_message, session_id,
             provider_type, is_streaming, cost_multiplier, created_at, data_source
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
             rusqlite::params![
                 request_id,
                 "_codex_session",    // provider_id
@@ -1307,6 +1322,7 @@ fn insert_codex_session_entry(
                 model,               // request_model = model
                 delta.input,
                 delta.output,
+                delta.reasoning_output,
                 delta.cached_input,
                 0i64,                // cache_creation_tokens: Codex 日志无此数据
                 input_cost,
@@ -1403,6 +1419,16 @@ mod tests {
     }
 
     fn token_count_at(input: u64, cached: u64, output: u64, timestamp: &str) -> serde_json::Value {
+        token_count_at_with_reasoning(input, cached, output, 0, timestamp)
+    }
+
+    fn token_count_at_with_reasoning(
+        input: u64,
+        cached: u64,
+        output: u64,
+        reasoning_output: u64,
+        timestamp: &str,
+    ) -> serde_json::Value {
         serde_json::json!({
             "timestamp": timestamp,
             "type": "event_msg",
@@ -1412,7 +1438,7 @@ mod tests {
                     "input_tokens": input,
                     "cached_input_tokens": cached,
                     "output_tokens": output,
-                    "reasoning_output_tokens": 0,
+                    "reasoning_output_tokens": reasoning_output,
                     "total_tokens": input + output
                 }}
             }
@@ -1451,11 +1477,13 @@ mod tests {
             input: 17934,
             cached_input: 9600,
             output: 454,
+            reasoning_output: 233,
         };
         let delta = compute_delta(&prev, &current);
         assert_eq!(delta.input, 17934);
         assert_eq!(delta.cached_input, 9600);
         assert_eq!(delta.output, 454);
+        assert_eq!(delta.reasoning_output, 233);
         assert!(!delta.is_zero());
     }
 
@@ -1465,16 +1493,19 @@ mod tests {
             input: 17934,
             cached_input: 9600,
             output: 454,
+            reasoning_output: 233,
         });
         let current = CumulativeTokens {
             input: 36722,
             cached_input: 27904,
             output: 804,
+            reasoning_output: 400,
         };
         let delta = compute_delta(&prev, &current);
         assert_eq!(delta.input, 36722 - 17934);
         assert_eq!(delta.cached_input, 27904 - 9600);
         assert_eq!(delta.output, 804 - 454);
+        assert_eq!(delta.reasoning_output, 400 - 233);
     }
 
     #[test]
@@ -1483,12 +1514,14 @@ mod tests {
             input: 58346,
             cached_input: 46976,
             output: 1045,
+            reasoning_output: 500,
         });
         // task 边界：相同的累计值
         let current = CumulativeTokens {
             input: 58346,
             cached_input: 46976,
             output: 1045,
+            reasoning_output: 500,
         };
         let delta = compute_delta(&prev, &current);
         assert!(delta.is_zero());
@@ -1501,16 +1534,19 @@ mod tests {
             input: 100,
             cached_input: 50,
             output: 30,
+            reasoning_output: 20,
         });
         let current = CumulativeTokens {
             input: 80,
             cached_input: 40,
             output: 20,
+            reasoning_output: 10,
         };
         let delta = compute_delta(&prev, &current);
         assert_eq!(delta.input, 0);
         assert_eq!(delta.cached_input, 0);
         assert_eq!(delta.output, 0);
+        assert_eq!(delta.reasoning_output, 0);
         assert!(delta.is_zero());
     }
 
@@ -1527,6 +1563,7 @@ mod tests {
         assert_eq!(tokens.input, 17934);
         assert_eq!(tokens.cached_input, 9600);
         assert_eq!(tokens.output, 454);
+        assert_eq!(tokens.reasoning_output, 233);
     }
 
     #[test]
@@ -1565,7 +1602,7 @@ mod tests {
             &parent,
             &[
                 session_meta(PARENT_ID),
-                token_count_at(1_000, 900, 100, "2026-07-10T03:00:01Z"),
+                token_count_at_with_reasoning(1_000, 900, 100, 40, "2026-07-10T03:00:01Z"),
                 turn_context_at("2026-07-10T03:00:10Z"),
             ],
         );
@@ -1574,8 +1611,8 @@ mod tests {
             &[
                 session_meta_at(CHILD_A_ID, None, Some(PARENT_ID), "2026-07-10T03:00:05Z"),
                 turn_context(),
-                token_count_at(1_000, 900, 100, "2026-07-10T03:00:06Z"),
-                token_count_at(1_300, 1_050, 150, "2026-07-10T03:00:07Z"),
+                token_count_at_with_reasoning(1_000, 900, 100, 40, "2026-07-10T03:00:06Z"),
+                token_count_at_with_reasoning(1_300, 1_050, 150, 70, "2026-07-10T03:00:07Z"),
             ],
         );
 
@@ -1586,13 +1623,13 @@ mod tests {
         );
 
         let conn = lock_conn!(db.conn);
-        let usage: (i64, i64, i64) = conn.query_row(
-            "SELECT input_tokens, cache_read_tokens, output_tokens
+        let usage: (i64, i64, i64, i64) = conn.query_row(
+            "SELECT input_tokens, cache_read_tokens, output_tokens, reasoning_tokens
              FROM proxy_request_logs WHERE request_id = ?1",
             [format!("{CODEX_THREAD_REQUEST_ID_PREFIX}:{CHILD_A_ID}:2")],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )?;
-        assert_eq!(usage, (300, 150, 50));
+        assert_eq!(usage, (300, 150, 50, 30));
         Ok(())
     }
 
@@ -2120,6 +2157,7 @@ mod tests {
             input: 10,
             cached_input: 1,
             output: 2,
+            reasoning_output: 0,
         };
         let mut suspected_duplicates = 0;
         let inserted = insert_codex_session_entry(
@@ -2149,6 +2187,7 @@ mod tests {
             input: 10,
             cached_input: 1,
             output: 2,
+            reasoning_output: 0,
         };
         let mut suspected_duplicates = 0;
         assert!(insert_codex_session_entry(
@@ -2310,11 +2349,13 @@ mod tests {
             input: 100,
             cached_input: 0,
             output: 50,
+            reasoning_output: 0,
         });
         let current = CumulativeTokens {
             input: 110,       // delta = 10
             cached_input: 80, // delta = 80（异常：大于 input delta）
             output: 60,
+            reasoning_output: 0,
         };
         let delta = compute_delta(&prev, &current);
         // 钳制前：cached_input = 80, input = 10

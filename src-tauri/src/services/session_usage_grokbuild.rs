@@ -62,6 +62,7 @@ const SETTLE_WINDOW_SECONDS: i64 = SESSION_PROXY_DEDUP_WINDOW_SECONDS;
 struct GrokCounters {
     input: u64,
     output: u64,
+    reasoning: u64,
     cached: u64,
     api_ms: u64,
     model_calls: u64,
@@ -73,7 +74,7 @@ struct GrokCounters {
 
 impl GrokCounters {
     fn is_zero(&self) -> bool {
-        self.input == 0 && self.output == 0 && self.cached == 0
+        self.input == 0 && self.output == 0 && self.reasoning == 0 && self.cached == 0
     }
 
     fn reported_cost_usd(&self) -> Option<Decimal> {
@@ -339,6 +340,7 @@ fn parse_grok_counters(value: &serde_json::Value) -> GrokCounters {
     GrokCounters {
         input: get("inputTokens"),
         output: get("outputTokens"),
+        reasoning: get("reasoningTokens"),
         cached: get("cachedReadTokens"),
         api_ms: get("apiDurationMs"),
         model_calls: get("modelCalls"),
@@ -380,6 +382,7 @@ fn insert_grok_session_entry(
     let usage = TokenUsage {
         input_tokens: clamp(turn.input),
         output_tokens: clamp(turn.output),
+        reasoning_tokens: clamp(turn.reasoning),
         cache_read_tokens: clamp(turn.cached),
         cache_creation_tokens: 0,
         model: Some(model.to_string()),
@@ -473,16 +476,17 @@ fn insert_grok_session_entry(
     conn.execute(
         "INSERT INTO proxy_request_logs (
             request_id, provider_id, app_type, model, request_model,
-            input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+            input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cache_creation_tokens,
             input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd,
             latency_ms, first_token_ms, status_code, error_message, session_id,
             provider_type, is_streaming, cost_multiplier, created_at, data_source,
             input_token_semantics
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)
         ON CONFLICT(request_id) DO UPDATE SET
             model = excluded.model,
             input_tokens = excluded.input_tokens,
             output_tokens = excluded.output_tokens,
+            reasoning_tokens = excluded.reasoning_tokens,
             cache_read_tokens = excluded.cache_read_tokens,
             input_cost_usd = excluded.input_cost_usd,
             output_cost_usd = excluded.output_cost_usd,
@@ -493,6 +497,7 @@ fn insert_grok_session_entry(
         WHERE data_source = 'grok_session'
           AND (input_tokens != excluded.input_tokens
            OR output_tokens != excluded.output_tokens
+           OR reasoning_tokens != excluded.reasoning_tokens
            OR cache_read_tokens != excluded.cache_read_tokens
            OR latency_ms != excluded.latency_ms
            OR model != excluded.model)",
@@ -504,6 +509,7 @@ fn insert_grok_session_entry(
             model,               // request_model = model
             usage.input_tokens,
             usage.output_tokens,
+            usage.reasoning_tokens,
             usage.cache_read_tokens,
             0i64,                // cache_creation_tokens
             input_cost,
@@ -643,7 +649,7 @@ mod tests {
             "not json at all\n",
             // 显式标为非 turn_completed 却带 usage：防中途快照双算，不得导入
             "{\"timestamp\":\"2026-07-20T13:26:20Z\",\"method\":\"_x.ai/session/update\",\"params\":{\"update\":{\"sessionUpdate\":\"usage_snapshot\",\"prompt_id\":\"px\",\"usage\":{\"inputTokens\":9999,\"outputTokens\":9,\"cachedReadTokens\":0}}}}\n",
-            "{\"timestamp\":\"2026-07-20T13:26:24Z\",\"method\":\"_x.ai/session/update\",\"params\":{\"update\":{\"sessionUpdate\":\"turn_completed\",\"prompt_id\":\"p1\",\"usage\":{\"inputTokens\":16632,\"outputTokens\":104,\"cachedReadTokens\":0,\"modelUsage\":{\"grok-4.5-build\":{\"inputTokens\":16632,\"outputTokens\":104,\"cachedReadTokens\":0,\"apiDurationMs\":5342,\"costUsdTicks\":338880000}}}}}}\n",
+            "{\"timestamp\":\"2026-07-20T13:26:24Z\",\"method\":\"_x.ai/session/update\",\"params\":{\"update\":{\"sessionUpdate\":\"turn_completed\",\"prompt_id\":\"p1\",\"usage\":{\"inputTokens\":16632,\"outputTokens\":104,\"cachedReadTokens\":0,\"modelUsage\":{\"grok-4.5-build\":{\"inputTokens\":16632,\"outputTokens\":104,\"reasoningTokens\":42,\"cachedReadTokens\":0,\"apiDurationMs\":5342,\"costUsdTicks\":338880000}}}}}}\n",
         );
         let events = parse_grok_usage_events(content);
         assert_eq!(events.len(), 1);
@@ -655,6 +661,7 @@ mod tests {
             GrokCounters {
                 input: 16632,
                 output: 104,
+                reasoning: 42,
                 cached: 0,
                 api_ms: 5342,
                 model_calls: 0,

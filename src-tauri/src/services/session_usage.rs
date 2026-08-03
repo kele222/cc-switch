@@ -517,6 +517,7 @@ fn insert_session_log_entry(
     let usage = TokenUsage {
         input_tokens: msg.input_tokens,
         output_tokens: msg.output_tokens,
+        reasoning_tokens: 0,
         cache_read_tokens: msg.cache_read_tokens,
         cache_creation_tokens: msg.cache_creation_tokens,
         model: Some(msg.model.clone()),
@@ -550,11 +551,11 @@ fn insert_session_log_entry(
         .execute(
             "INSERT OR IGNORE INTO proxy_request_logs (
             request_id, provider_id, app_type, model, request_model,
-            input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+            input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cache_creation_tokens,
             input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd,
             latency_ms, first_token_ms, status_code, error_message, session_id,
             provider_type, is_streaming, cost_multiplier, created_at, data_source
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
             rusqlite::params![
                 request_id,
                 "_session",         // provider_id: 标记为会话来源
@@ -563,6 +564,7 @@ fn insert_session_log_entry(
                 msg.model,          // request_model = model
                 msg.input_tokens,
                 msg.output_tokens,
+                0i64,
                 msg.cache_read_tokens,
                 msg.cache_creation_tokens,
                 input_cost,

@@ -170,6 +170,9 @@ export function RequestLogTable({
                     {t("usage.outputTokens")}
                   </TableHead>
                   <TableHead className="text-center whitespace-nowrap">
+                    {t("usage.reasoningTokens")}
+                  </TableHead>
+                  <TableHead className="text-center whitespace-nowrap">
                     {t("usage.totalCost")}
                   </TableHead>
                   <TableHead className="text-center whitespace-nowrap">
@@ -187,7 +190,7 @@ export function RequestLogTable({
                 {logs.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={9}
+                      colSpan={10}
                       className="text-center text-muted-foreground"
                     >
                       {t("usage.noData")}
@@ -269,6 +272,9 @@ export function RequestLogTable({
                         </TableCell>
                         <TableCell className="text-center">
                           {fmtInt(log.outputTokens, locale)}
+                        </TableCell>
+                        <TableCell className="text-center">
+                          {fmtInt(log.reasoningTokens, locale)}
                         </TableCell>
                         <TableCell className="text-center px-1.5">
                           <div

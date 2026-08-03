@@ -135,6 +135,7 @@ pub struct RequestLogDetail {
     pub cost_multiplier: String,
     pub input_tokens: u32,
     pub output_tokens: u32,
+    pub reasoning_tokens: u32,
     pub cache_read_tokens: u32,
     pub cache_creation_tokens: u32,
     /// Internal storage semantics; omitted from the UI/API payload.
@@ -159,11 +160,11 @@ pub struct RequestLogDetail {
     pub pricing_model: Option<String>,
 }
 
-/// 把 26 列的查询结果映射为 `RequestLogDetail`。
+/// 把 27 列的查询结果映射为 `RequestLogDetail`。
 ///
-/// 调用方的 SELECT **必须**按以下顺序返回 26 列：
+/// 调用方的 SELECT **必须**按以下顺序返回 27 列：
 /// `request_id, provider_id, provider_name, app_type, model, request_model,
-///  cost_multiplier, input_tokens, output_tokens, cache_read_tokens,
+///  cost_multiplier, input_tokens, output_tokens, reasoning_tokens, cache_read_tokens,
 ///  cache_creation_tokens, input_cost_usd, output_cost_usd, cache_read_cost_usd,
 ///  cache_creation_cost_usd, total_cost_usd, is_streaming, latency_ms,
 ///  first_token_ms, duration_ms, status_code, error_message, created_at,
@@ -183,23 +184,24 @@ fn row_to_request_log_detail(row: &rusqlite::Row<'_>) -> rusqlite::Result<Reques
             .unwrap_or_else(|| "1".to_string()),
         input_tokens: row.get::<_, i64>(7)? as u32,
         output_tokens: row.get::<_, i64>(8)? as u32,
-        cache_read_tokens: row.get::<_, i64>(9)? as u32,
-        cache_creation_tokens: row.get::<_, i64>(10)? as u32,
-        input_cost_usd: row.get(11)?,
-        output_cost_usd: row.get(12)?,
-        cache_read_cost_usd: row.get(13)?,
-        cache_creation_cost_usd: row.get(14)?,
-        total_cost_usd: row.get(15)?,
-        is_streaming: row.get::<_, i64>(16)? != 0,
-        latency_ms: row.get::<_, i64>(17)? as u64,
-        first_token_ms: row.get::<_, Option<i64>>(18)?.map(|v| v as u64),
-        duration_ms: row.get::<_, Option<i64>>(19)?.map(|v| v as u64),
-        status_code: row.get::<_, i64>(20)? as u16,
-        error_message: row.get(21)?,
-        created_at: row.get(22)?,
-        data_source: row.get(23)?,
-        pricing_model: row.get(24)?,
-        input_token_semantics: row.get::<_, i64>(25)?,
+        reasoning_tokens: row.get::<_, i64>(9)? as u32,
+        cache_read_tokens: row.get::<_, i64>(10)? as u32,
+        cache_creation_tokens: row.get::<_, i64>(11)? as u32,
+        input_cost_usd: row.get(12)?,
+        output_cost_usd: row.get(13)?,
+        cache_read_cost_usd: row.get(14)?,
+        cache_creation_cost_usd: row.get(15)?,
+        total_cost_usd: row.get(16)?,
+        is_streaming: row.get::<_, i64>(17)? != 0,
+        latency_ms: row.get::<_, i64>(18)? as u64,
+        first_token_ms: row.get::<_, Option<i64>>(19)?.map(|v| v as u64),
+        duration_ms: row.get::<_, Option<i64>>(20)?.map(|v| v as u64),
+        status_code: row.get::<_, i64>(21)? as u16,
+        error_message: row.get(22)?,
+        created_at: row.get(23)?,
+        data_source: row.get(24)?,
+        pricing_model: row.get(25)?,
+        input_token_semantics: row.get::<_, i64>(26)?,
     })
 }
 
@@ -1609,7 +1611,7 @@ impl Database {
         let sql = format!(
             "SELECT l.request_id, l.provider_id, {logs_pname} as provider_name, l.app_type, l.model,
                     l.request_model, l.cost_multiplier,
-                    l.input_tokens, l.output_tokens, l.cache_read_tokens, l.cache_creation_tokens,
+                    l.input_tokens, l.output_tokens, l.reasoning_tokens, l.cache_read_tokens, l.cache_creation_tokens,
                     l.input_cost_usd, l.output_cost_usd, l.cache_read_cost_usd, l.cache_creation_cost_usd, l.total_cost_usd,
                     l.is_streaming, l.latency_ms, l.first_token_ms, l.duration_ms,
                     l.status_code, l.error_message, l.created_at, l.data_source, l.pricing_model,
@@ -1653,7 +1655,7 @@ impl Database {
         let detail_sql = format!(
             "SELECT l.request_id, l.provider_id, {detail_pname} as provider_name, l.app_type, l.model,
                     l.request_model, l.cost_multiplier,
-                    input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+                    input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cache_creation_tokens,
                     input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd,
                     is_streaming, latency_ms, first_token_ms, duration_ms,
                     status_code, error_message, created_at, l.data_source, l.pricing_model,
@@ -1809,7 +1811,7 @@ impl Database {
         const BASE_SQL: &str =
             "SELECT request_id, provider_id, NULL AS provider_name, app_type, model, request_model,
                         cost_multiplier,
-                        input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+                        input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cache_creation_tokens,
                         input_cost_usd, output_cost_usd, cache_read_cost_usd,
                         cache_creation_cost_usd, total_cost_usd, is_streaming, latency_ms,
                         first_token_ms, duration_ms, status_code, error_message, created_at,
@@ -4345,6 +4347,33 @@ mod tests {
         let result = find_model_pricing_row(&conn, "unknown-model-123")?;
         assert!(result.is_none(), "不应该匹配不存在的模型");
 
+        Ok(())
+    }
+
+    #[test]
+    fn request_log_queries_return_reasoning_tokens() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        {
+            let conn = lock_conn!(db.conn);
+            conn.execute(
+                "INSERT INTO proxy_request_logs (
+                    request_id, provider_id, app_type, model,
+                    input_tokens, output_tokens, reasoning_tokens,
+                    latency_ms, status_code, created_at
+                 ) VALUES ('reasoning-row', 'provider-1', 'codex', 'gpt-5.6',
+                           1000, 500, 321, 100, 200, 1000)",
+                [],
+            )?;
+        }
+
+        let logs = db.get_request_logs(&LogFilters::default(), 0, 10)?;
+        assert_eq!(logs.data.len(), 1);
+        assert_eq!(logs.data[0].reasoning_tokens, 321);
+
+        let detail = db
+            .get_request_detail("reasoning-row")?
+            .expect("request detail");
+        assert_eq!(detail.reasoning_tokens, 321);
         Ok(())
     }
 }

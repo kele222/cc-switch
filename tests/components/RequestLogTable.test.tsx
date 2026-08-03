@@ -158,4 +158,68 @@ describe("RequestLogTable", () => {
       );
     });
   });
+
+  it("shows reasoning tokens in the request log", () => {
+    useRequestLogsMock.mockReturnValue({
+      data: {
+        data: [
+          {
+            requestId: "req-1",
+            providerId: "provider-1",
+            providerName: "Provider One",
+            appType: "codex",
+            model: "gpt-5.6",
+            costMultiplier: "1",
+            inputTokens: 1000,
+            outputTokens: 20000,
+            reasoningTokens: 12345,
+            cacheReadTokens: 0,
+            cacheCreationTokens: 0,
+            inputCostUsd: "0.001",
+            outputCostUsd: "0.002",
+            cacheReadCostUsd: "0",
+            cacheCreationCostUsd: "0",
+            totalCostUsd: "0.003",
+            isStreaming: true,
+            latencyMs: 1200,
+            statusCode: 200,
+            createdAt: 1_710_000_000,
+            dataSource: "proxy",
+          },
+        ],
+        total: 1,
+        page: 0,
+        pageSize: 20,
+      },
+      isLoading: false,
+    });
+
+    render(
+      <RequestLogTable
+        range={{ preset: "today" }}
+        rangeLabel="Today"
+        appType="all"
+        refreshIntervalMs={0}
+      />,
+    );
+
+    expect(screen.getByText("usage.reasoningTokens")).toBeInTheDocument();
+    expect(screen.getByText("12,345")).toBeInTheDocument();
+  });
+
+  it("spans all ten columns in the empty state", () => {
+    render(
+      <RequestLogTable
+        range={{ preset: "today" }}
+        rangeLabel="Today"
+        appType="all"
+        refreshIntervalMs={0}
+      />,
+    );
+
+    expect(screen.getByText("usage.noData").closest("td")).toHaveAttribute(
+      "colspan",
+      "10",
+    );
+  });
 });
