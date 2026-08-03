@@ -451,7 +451,7 @@ pub fn run() {
                                 path: log_dir,
                                 file_name: Some("cc-switch".into()),
                             })
-                            .level(log::LevelFilter::Error),
+                            .filter(|metadata| metadata.level() == log::Level::Error),
                             Target::new(TargetKind::Dispatch(
                                 fern::Dispatch::new().chain(fern::Output::call(|record| {
                                     diagnostic_logs::record_runtime_log(
