@@ -1,0 +1,62 @@
+<h2>日志中心：存储与数据流</h2>
+<p class="subtitle">独立日志库承接高频诊断数据，主数据库继续负责稳定的业务与统计数据</p>
+
+<div class="mockup">
+  <div class="mockup-header">请求追踪与运行日志写入路径</div>
+  <div class="mockup-body">
+    <div style="display:grid;grid-template-columns:1fr 52px 1fr 52px 1.15fr;gap:10px;align-items:center">
+      <div style="border:1px solid #cbd5e1;padding:16px;border-radius:6px;background:#fff">
+        <div class="label">数据来源</div>
+        <h3 style="margin:6px 0">代理请求与应用事件</h3>
+        <p style="margin:0">入站请求、转换后请求、重试、上游响应、SSE、运行日志</p>
+      </div>
+      <div style="text-align:center;font-size:24px;color:#64748b">→</div>
+      <div style="border:1px solid #0f766e;padding:16px;border-radius:6px;background:#f0fdfa">
+        <div class="label">内存处理</div>
+        <h3 style="margin:6px 0">脱敏 + 有界队列</h3>
+        <p style="margin:0">过滤凭据与大字段，SSE 聚合，250ms / 1s 批量提交</p>
+      </div>
+      <div style="text-align:center;font-size:24px;color:#64748b">→</div>
+      <div style="border:2px solid #2563eb;padding:16px;border-radius:6px;background:#eff6ff">
+        <div class="label">高频日志存储</div>
+        <h3 style="margin:6px 0">cc-switch-logs.db</h3>
+        <p style="margin:0">WAL、单写入任务、3 天保留、请求 300 MiB、运行日志 50 MiB</p>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:22px">
+      <div style="border:1px solid #cbd5e1;padding:16px;border-radius:6px;background:#fff">
+        <div class="label">稳定业务数据库</div>
+        <h3 style="margin:6px 0">cc-switch.db</h3>
+        <p style="margin:0">供应商、MCP、设置与 proxy_request_logs 统计摘要。通过 request_id 与日志库关联，不接收 SSE 正文。</p>
+      </div>
+      <div style="border:1px solid #cbd5e1;padding:16px;border-radius:6px;background:#fff">
+        <div class="label">故障兜底</div>
+        <h3 style="margin:6px 0">最小轮转文件</h3>
+        <p style="margin:0">仅记录启动、崩溃、日志库初始化/写入失败；不记录请求正文与常规信息日志。</p>
+      </div>
+    </div>
+
+    <div style="margin-top:22px;border-top:1px solid #e2e8f0;padding-top:18px;display:grid;grid-template-columns:1fr 52px 1.3fr;gap:10px;align-items:center">
+      <div style="border:1px solid #cbd5e1;padding:16px;border-radius:6px;background:#fff">
+        <div class="label">只读查询 API</div>
+        <h3 style="margin:6px 0">筛选、分页、实时事件</h3>
+        <p style="margin:0">后端组合日志库详情与主库统计，不把大正文一次性推给前端。</p>
+      </div>
+      <div style="text-align:center;font-size:24px;color:#64748b">→</div>
+      <div style="border:2px solid #16a34a;padding:16px;border-radius:6px;background:#f0fdf4">
+        <div class="label">前端</div>
+        <h3 style="margin:6px 0">日志中心</h3>
+        <p style="margin:0">请求追踪 / 运行日志双页签；实时追加可暂停；正文按需加载。</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="option" data-choice="architecture-approved" onclick="toggleSelect(this)" style="margin-top:20px">
+  <div class="letter">✓</div>
+  <div class="content">
+    <h3>架构方向符合预期</h3>
+    <p>点击确认，或回到对话中指出需要调整的部分。</p>
+  </div>
+</div>

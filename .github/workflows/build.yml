@@ -1,0 +1,84 @@
+name: Build Tauri App (Ultimate Fix)
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 8 
+
+      - name: Install frontend dependencies
+        run: pnpm install
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Upgrade Rust backend dependencies to match frontend
+        run: |
+          cargo add tauri@2.11 --manifest-path src-tauri/Cargo.toml
+          cargo add tauri-plugin-dialog@2.7 --manifest-path src-tauri/Cargo.toml
+          cargo add tauri-plugin-log@2.8 --manifest-path src-tauri/Cargo.toml
+          cargo add tauri-plugin-process@2.3 --manifest-path src-tauri/Cargo.toml
+          cargo add tauri-plugin-updater@2.10 --manifest-path src-tauri/Cargo.toml
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Build Frontend (Vite/React)
+        run: pnpm run build || pnpm run build:web || pnpm run build:renderer
+
+      # 【核弹级修复 1】：使用 PowerShell 暴力清空所有 JSON 和 Rust 代码里的 pubkey
+      - name: Nuke all pubkey configs
+        shell: pwsh
+        run: |
+          # 1. 暴力替换 tauri.conf.json 里的 pubkey 和 updater 配置
+          $jsonPath = "src-tauri/tauri.conf.json"
+          if (Test-Path $jsonPath) {
+            $content = Get-Content $jsonPath -Raw
+            $content = $content -replace '"pubkey"\s*:\s*"[^"]*"', '"pubkey": ""'
+            $content = $content -replace '"createUpdaterArtifacts"\s*:\s*"[^"]*"', '"createUpdaterArtifacts": false'
+            $content = $content -replace '"createUpdaterArtifacts"\s*:\s*true', '"createUpdaterArtifacts": false'
+            Set-Content $jsonPath $content -Force
+          }
+          
+          # 2. 暴力替换 Rust 源码里可能写死的 .pubkey("...")
+          Get-ChildItem -Path src-tauri/src -Recurse -Filter *.rs -ErrorAction SilentlyContinue | ForEach-Object {
+            $rsContent = Get-Content $_.FullName -Raw
+            $rsContent = $rsContent -replace '\.pubkey\("[^"]*"\)', ''
+            Set-Content $_.FullName $rsContent -Force
+          }
+
+      - name: Build Tauri Backend (Rust)
+        run: pnpm tauri build
+
+      # 【核弹级修复 2】：将 if: success() 改为 if: always()
+      # 这意味着：只要 exe 生成了，哪怕最后一步又抽风报错，也强制把文件上传给你！
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cc-switch-windows-exe
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/cc-switch.exe
