@@ -146,6 +146,8 @@ pub struct RequestForwarder {
     /// `max_attempts = max_retries + 1`，所以 max_retries=0 表示仅尝试一家、
     /// max_retries=3（默认）表示最多 4 家。loop 同时受 providers.len() 自然限制。
     max_attempts: usize,
+    trace_id: Option<String>,
+    trace_started_at: std::time::Instant,
 }
 
 impl RequestForwarder {
@@ -213,6 +215,7 @@ impl RequestForwarder {
         optimizer_config: OptimizerConfig,
         copilot_optimizer_config: CopilotOptimizerConfig,
         max_retries: u32,
+        trace_id: Option<String>,
     ) -> Self {
         // max_retries 是「失败后重试次数」语义，attempt 上限 = retries + 1。
         // saturating_add 防止 u32::MAX + 1 溢出。
@@ -236,6 +239,8 @@ impl RequestForwarder {
                 streaming_first_byte_timeout,
             ),
             max_attempts,
+            trace_id,
+            trace_started_at: std::time::Instant::now(),
         }
     }
 
@@ -465,6 +470,25 @@ impl RequestForwarder {
 
             attempted_providers += 1;
 
+            if let Some(trace_id) = &self.trace_id {
+                crate::diagnostic_logs::record_trace_event(
+                    crate::diagnostic_logs::TraceEventInput {
+                        trace_id: trace_id.clone(),
+                        offset_ms: self.trace_started_at.elapsed().as_millis() as u64,
+                        stage: "upstream_attempt".to_string(),
+                        kind: "request".to_string(),
+                        attempt_no: Some(attempted_providers as u32),
+                        provider_id: Some(provider.id.clone()),
+                        status_code: None,
+                        summary: Some(format!("Sending request to {}", provider.name)),
+                        payload: Some(serde_json::json!({
+                            "headers": crate::diagnostic_logs::redact_headers(&headers),
+                            "body": crate::diagnostic_logs::redact_value(&provider_body),
+                        })),
+                    },
+                );
+            }
+
             // 更新状态中的当前 Provider 信息（per-attempt 维度的标识）
             //
             // total_requests / last_request_at / active_connections 已由
@@ -491,6 +515,27 @@ impl RequestForwarder {
                 .await
             {
                 Ok((response, claude_api_format, outbound_model)) => {
+                    if let Some(trace_id) = &self.trace_id {
+                        crate::diagnostic_logs::record_trace_event(
+                            crate::diagnostic_logs::TraceEventInput {
+                                trace_id: trace_id.clone(),
+                                offset_ms: self.trace_started_at.elapsed().as_millis() as u64,
+                                stage: "upstream_response".to_string(),
+                                kind: "headers".to_string(),
+                                attempt_no: Some(attempted_providers as u32),
+                                provider_id: Some(provider.id.clone()),
+                                status_code: Some(response.status().as_u16()),
+                                summary: Some(format!(
+                                    "{} returned HTTP {}",
+                                    provider.name,
+                                    response.status().as_u16()
+                                )),
+                                payload: Some(serde_json::json!({
+                                    "headers": crate::diagnostic_logs::redact_headers(response.headers()),
+                                })),
+                            },
+                        );
+                    }
                     // 成功：普通闭合熔断状态异步记录，避免阻塞流式首包返回；
                     // HalfOpen 探测仍同步等待，保证 permit 与熔断状态及时释放。
                     self.record_success_result(&provider.id, app_type_str, used_half_open_permit)
@@ -543,6 +588,21 @@ impl RequestForwarder {
                     });
                 }
                 Err(e) => {
+                    if let Some(trace_id) = &self.trace_id {
+                        crate::diagnostic_logs::record_trace_event(
+                            crate::diagnostic_logs::TraceEventInput {
+                                trace_id: trace_id.clone(),
+                                offset_ms: self.trace_started_at.elapsed().as_millis() as u64,
+                                stage: "upstream_attempt".to_string(),
+                                kind: "error".to_string(),
+                                attempt_no: Some(attempted_providers as u32),
+                                provider_id: Some(provider.id.clone()),
+                                status_code: None,
+                                summary: Some(format!("{} request failed", provider.name)),
+                                payload: Some(serde_json::json!({ "error": e.to_string() })),
+                            },
+                        );
+                    }
                     // 检测是否需要触发整流器（仅 Claude/ClaudeAuth 供应商）
                     let provider_type = ProviderType::from_app_type_and_config(app_type, provider);
                     let is_anthropic_provider = matches!(
@@ -3630,6 +3690,8 @@ mod tests {
             non_streaming_timeout,
             streaming_first_byte_timeout,
             max_attempts: 1,
+            trace_id: None,
+            trace_started_at: std::time::Instant::now(),
         }
     }
 

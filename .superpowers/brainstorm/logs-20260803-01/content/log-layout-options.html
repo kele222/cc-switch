@@ -1,0 +1,85 @@
+<h2>日志中心布局选择</h2>
+<p class="subtitle">三种方案都包含“请求追踪 / 运行日志”页签；区别在于历史扫描和详情查看方式</p>
+
+<div class="cards">
+  <div class="card" data-choice="split-pane" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:12px;background:#f8fafc">
+      <div style="border:1px solid #cbd5e1;border-radius:6px;overflow:hidden;background:#fff">
+        <div style="display:flex;justify-content:space-between;padding:9px 11px;border-bottom:1px solid #e2e8f0;font-size:12px;font-weight:600">
+          <span>请求追踪　运行日志</span><span>⏸　清空</span>
+        </div>
+        <div style="padding:8px;border-bottom:1px solid #e2e8f0;display:flex;gap:5px">
+          <span style="border:1px solid #cbd5e1;border-radius:4px;padding:3px 8px;font-size:10px">搜索</span>
+          <span style="border:1px solid #cbd5e1;border-radius:4px;padding:3px 8px;font-size:10px">应用</span>
+          <span style="border:1px solid #cbd5e1;border-radius:4px;padding:3px 8px;font-size:10px">状态</span>
+        </div>
+        <div style="display:grid;grid-template-columns:38% 62%;height:250px">
+          <div style="border-right:1px solid #e2e8f0;font-size:10px">
+            <div style="padding:9px;background:#eff6ff;border-left:3px solid #2563eb"><b>12:34:56　200</b><br>Codex · gpt-5.6<br><span style="color:#64748b">1.8s · stream</span></div>
+            <div style="padding:9px;border-top:1px solid #e2e8f0"><b>12:34:51　429</b><br>Claude · sonnet-4<br><span style="color:#64748b">retry 2 · 842ms</span></div>
+            <div style="padding:9px;border-top:1px solid #e2e8f0"><b>12:34:44　200</b><br>Gemini · 2.5-pro<br><span style="color:#64748b">3.2s · stream</span></div>
+          </div>
+          <div style="padding:11px;font-size:10px">
+            <div style="font-weight:700;margin-bottom:8px">请求 req_7fa2</div>
+            <div style="display:flex;gap:5px;margin-bottom:12px"><span style="background:#dbeafe;padding:3px 6px;border-radius:3px">时间线</span><span style="padding:3px 6px">请求</span><span style="padding:3px 6px">响应</span><span style="padding:3px 6px">SSE</span></div>
+            <div style="border-left:2px solid #94a3b8;padding-left:10px;line-height:2">
+              <div>● 客户端请求 <span style="color:#64748b">0 ms</span></div>
+              <div>● 转换并脱敏 <span style="color:#64748b">4 ms</span></div>
+              <div>● Provider A 返回 429 <span style="color:#b91c1c">842 ms</span></div>
+              <div>● Provider B 首字节 <span style="color:#64748b">1.1 s</span></div>
+              <div>● SSE 完成 <span style="color:#15803d">1.8 s</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A. 分栏追踪器（推荐）</h3>
+      <p>左侧快速切换请求，右侧持续查看阶段、正文与 SSE。窗口较窄时详情替换列表并提供返回按钮。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="table-drawer" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:12px;background:#f8fafc">
+      <div style="border:1px solid #cbd5e1;border-radius:6px;overflow:hidden;background:#fff;height:330px">
+        <div style="padding:9px 11px;border-bottom:1px solid #e2e8f0;font-size:12px;font-weight:600">请求追踪　运行日志</div>
+        <div style="padding:8px;display:flex;gap:5px"><span style="border:1px solid #cbd5e1;padding:3px 8px;font-size:10px">搜索</span><span style="border:1px solid #cbd5e1;padding:3px 8px;font-size:10px">筛选</span></div>
+        <div style="font-size:9px">
+          <div style="display:grid;grid-template-columns:1.2fr 1fr 1.5fr .7fr .8fr;padding:7px;background:#f1f5f9;font-weight:700"><span>时间</span><span>应用</span><span>模型</span><span>状态</span><span>耗时</span></div>
+          <div style="display:grid;grid-template-columns:1.2fr 1fr 1.5fr .7fr .8fr;padding:9px;border-bottom:1px solid #e2e8f0"><span>12:34:56</span><span>Codex</span><span>gpt-5.6</span><span>200</span><span>1.8s</span></div>
+          <div style="display:grid;grid-template-columns:1.2fr 1fr 1.5fr .7fr .8fr;padding:9px;border-bottom:1px solid #e2e8f0"><span>12:34:51</span><span>Claude</span><span>sonnet-4</span><span>429</span><span>842ms</span></div>
+          <div style="display:grid;grid-template-columns:1.2fr 1fr 1.5fr .7fr .8fr;padding:9px"><span>12:34:44</span><span>Gemini</span><span>2.5-pro</span><span>200</span><span>3.2s</span></div>
+        </div>
+        <div style="position:relative;margin:-84px 8px 0 34%;height:116px;border:2px solid #2563eb;border-radius:6px;background:#fff;box-shadow:0 8px 20px #94a3b866;padding:10px;font-size:9px">
+          <b>请求详情</b><span style="float:right">×</span><hr style="border:0;border-top:1px solid #e2e8f0"><div>概览　请求　响应　SSE</div><p>详细内容显示在抽屉 / 弹窗中</p>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B. 全宽表格 + 抽屉</h3>
+      <p>一屏能看到更多请求列，但详情打开后会遮挡列表；连续对比多个请求需要反复开关。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="live-console" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:12px;background:#111827">
+      <div style="height:306px;color:#d1d5db;font:10px/1.8 ui-monospace,monospace;padding:10px;overflow:hidden">
+        <div style="color:#93c5fd">12:34:56.102 [Codex] request started</div>
+        <div>12:34:56.106 transform request model=gpt-5.6</div>
+        <div style="color:#fca5a5">12:34:56.948 provider-a HTTP 429</div>
+        <div style="color:#fde68a">12:34:56.950 retry provider-b</div>
+        <div>12:34:57.211 SSE response.created</div>
+        <div>12:34:57.248 SSE output_text.delta bytes=24</div>
+        <div>12:34:57.301 SSE output_text.delta bytes=31</div>
+        <div>12:34:57.842 SSE response.completed</div>
+        <div style="color:#86efac">12:34:57.844 request completed 200 1.8s</div>
+        <div style="margin-top:12px;color:#93c5fd">12:35:01.002 [Claude] request started</div>
+        <div>12:35:01.006 outbound provider=primary</div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C. 实时控制台</h3>
+      <p>最适合盯住实时事件，但历史请求的筛选、聚合和阶段对比效率较低。</p>
+    </div>
+  </div>
+</div>

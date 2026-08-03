@@ -189,6 +189,7 @@ async fn handle_messages_for_app(
         .get("stream")
         .and_then(|s| s.as_bool())
         .unwrap_or(false);
+    ctx.start_diagnostic_trace(&method, endpoint, is_stream, &headers, &body);
 
     // 转发请求
     let forwarder = ctx.create_forwarder(&state);
@@ -721,6 +722,7 @@ pub async fn handle_chat_completions(
         .get("stream")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    ctx.start_diagnostic_trace(&method, &endpoint, is_stream, &headers, &body);
 
     let forwarder = ctx.create_forwarder(&state);
     let mut result = match forwarder
@@ -811,6 +813,7 @@ async fn handle_responses_for_app(
         .get("stream")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    ctx.start_diagnostic_trace(&method, &endpoint, is_stream, &headers, &body);
     let codex_tool_context = transform_codex_chat::build_codex_tool_context_from_request(&body);
     // Captured before `body` is moved into the forwarder: the flat-name →
     // {namespace, name} map used to restore the native Responses upstream's
@@ -948,6 +951,7 @@ async fn handle_responses_compact_for_app(
         .get("stream")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    ctx.start_diagnostic_trace(&method, &endpoint, is_stream, &headers, &body);
     let codex_tool_context = transform_codex_chat::build_codex_tool_context_from_request(&body);
     let namespace_restore_map = transform_codex_responses_namespace::namespace_restore_map(&body);
 
@@ -1958,6 +1962,7 @@ pub async fn handle_gemini(
         .get("stream")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    ctx.start_diagnostic_trace(&method, endpoint, is_stream, &headers, &body);
 
     let forwarder = ctx.create_forwarder(&state);
     let mut result = match forwarder
@@ -2580,7 +2585,7 @@ fn log_forward_error(
     let request_id = uuid::Uuid::new_v4().to_string();
 
     if let Err(e) = logger.log_error_with_context(
-        request_id,
+        request_id.clone(),
         ctx.provider.id.clone(),
         ctx.app_type_str.to_string(),
         ctx.request_model.clone(),
@@ -2592,6 +2597,29 @@ fn log_forward_error(
         None,
     ) {
         log::warn!("记录失败请求日志失败: {e}");
+    }
+
+    if let Some(trace_id) = &ctx.trace_id {
+        crate::diagnostic_logs::record_trace_event(crate::diagnostic_logs::TraceEventInput {
+            trace_id: trace_id.clone(),
+            offset_ms: ctx.latency_ms(),
+            stage: "client_response".to_string(),
+            kind: "error".to_string(),
+            attempt_no: None,
+            provider_id: Some(ctx.provider.id.clone()),
+            status_code: Some(status_code),
+            summary: Some("Proxy request failed".to_string()),
+            payload: Some(serde_json::json!({ "error": get_error_message(error) })),
+        });
+        crate::diagnostic_logs::complete_trace(
+            trace_id,
+            Some(request_id),
+            None,
+            Some(ctx.provider.id.clone()),
+            Some(status_code),
+            ctx.latency_ms(),
+            "error",
+        );
     }
 }
 

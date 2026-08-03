@@ -11,6 +11,7 @@ mod commands;
 mod config;
 mod database;
 mod deeplink;
+mod diagnostic_logs;
 mod error;
 mod gemini_config;
 mod gemini_mcp;
@@ -425,6 +426,10 @@ pub fn run() {
 
                 let log_dir = panic_hook::get_log_dir();
 
+                if let Err(error) = diagnostic_logs::init() {
+                    eprintln!("Failed to initialize diagnostic log database: {error}");
+                }
+
                 // 确保日志目录存在
                 if let Err(e) = std::fs::create_dir_all(&log_dir) {
                     eprintln!("创建日志目录失败: {e}");
@@ -445,12 +450,23 @@ pub fn run() {
                             Target::new(TargetKind::Folder {
                                 path: log_dir,
                                 file_name: Some("cc-switch".into()),
-                            }),
+                            })
+                            .level(log::LevelFilter::Error),
+                            Target::new(TargetKind::Dispatch(
+                                fern::Dispatch::new().chain(fern::Output::call(|record| {
+                                    diagnostic_logs::record_runtime_log(
+                                        record.level().as_str(),
+                                        record.target(),
+                                        &record.args().to_string(),
+                                        None,
+                                    );
+                                })),
+                            )),
                         ])
                         // KeepSome(4) 保留 4 个轮转归档，加上当前文件最多约 100 MiB。
                         // 轮转仅按大小触发；跨重启继续追加，不再丢失上一次运行的日志。
                         .rotation_strategy(RotationStrategy::KeepSome(4))
-                        .max_file_size(20 * 1024 * 1024)
+                        .max_file_size(4 * 1024 * 1024)
                         .timezone_strategy(TimezoneStrategy::UseLocal)
                         .build(),
                 )?;
@@ -1361,6 +1377,13 @@ pub fn run() {
             commands::set_copilot_optimizer_config,
             commands::get_log_config,
             commands::set_log_config,
+            commands::get_diagnostic_request_traces,
+            commands::get_diagnostic_trace,
+            commands::get_diagnostic_runtime_logs,
+            commands::get_diagnostic_log_health,
+            commands::clear_diagnostic_logs,
+            commands::export_diagnostic_trace,
+            commands::record_frontend_diagnostic_log,
             commands::restart_app,
             commands::install_update_and_restart,
             commands::check_app_update_available,

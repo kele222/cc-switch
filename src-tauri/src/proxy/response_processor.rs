@@ -151,6 +151,21 @@ pub async fn handle_streaming(
     connection_guard: Option<ActiveConnectionGuard>,
 ) -> Response {
     let status = response.status();
+    if let Some(trace_id) = &ctx.trace_id {
+        crate::diagnostic_logs::record_trace_event(crate::diagnostic_logs::TraceEventInput {
+            trace_id: trace_id.clone(),
+            offset_ms: ctx.latency_ms(),
+            stage: "upstream_response".to_string(),
+            kind: "stream_start".to_string(),
+            attempt_no: None,
+            provider_id: Some(ctx.provider.id.clone()),
+            status_code: Some(status.as_u16()),
+            summary: Some("Streaming response started".to_string()),
+            payload: Some(serde_json::json!({
+                "headers": crate::diagnostic_logs::redact_headers(response.headers()),
+            })),
+        });
+    }
     log::debug!(
         "[{}] 已接收上游流式响应: status={}, headers={}",
         ctx.tag,
@@ -186,12 +201,22 @@ pub async fn handle_streaming(
     let timeout_config = ctx.streaming_timeout_config();
 
     // 创建带日志和超时的透传流
-    let logged_stream = create_logged_passthrough_stream(
+    let logged_stream = create_logged_passthrough_stream_with_trace(
         stream,
         ctx.tag,
         usage_collector,
         timeout_config,
         connection_guard,
+        ctx.trace_id.as_ref().map(|trace_id| DiagnosticStreamTrace {
+            trace_id: trace_id.clone(),
+            provider_id: ctx.provider.id.clone(),
+            response_model: ctx
+                .outbound_model
+                .clone()
+                .unwrap_or_else(|| ctx.request_model.clone()),
+            status_code: status.as_u16(),
+            start_time: ctx.start_time,
+        }),
     );
 
     let body = axum::body::Body::from_stream(logged_stream);
@@ -300,6 +325,36 @@ pub async fn handle_non_streaming(
         }
     } else {
         log::debug!("[{}] usage logging 已关闭，跳过非流式 usage 解析", ctx.tag);
+    }
+
+    if let Some(trace_id) = &ctx.trace_id {
+        let response_body = serde_json::from_slice::<Value>(&body_bytes)
+            .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&body_bytes).into_owned()));
+        crate::diagnostic_logs::record_trace_event(crate::diagnostic_logs::TraceEventInput {
+            trace_id: trace_id.clone(),
+            offset_ms: ctx.latency_ms(),
+            stage: "client_response".to_string(),
+            kind: "response".to_string(),
+            attempt_no: None,
+            provider_id: Some(ctx.provider.id.clone()),
+            status_code: Some(status.as_u16()),
+            summary: Some(format!("Non-streaming response ({})", status.as_u16())),
+            payload: Some(serde_json::json!({
+                "headers": crate::diagnostic_logs::redact_headers(&response_headers),
+                "body": response_body,
+            })),
+        });
+        crate::diagnostic_logs::complete_trace(
+            trace_id,
+            None,
+            ctx.outbound_model
+                .clone()
+                .or_else(|| Some(ctx.request_model.clone())),
+            Some(ctx.provider.id.clone()),
+            Some(status.as_u16()),
+            ctx.latency_ms(),
+            if status.is_success() { "success" } else { "error" },
+        );
     }
 
     // 构建响应
@@ -682,14 +737,79 @@ pub fn create_logged_passthrough_stream(
     timeout_config: StreamingTimeoutConfig,
     connection_guard: Option<ActiveConnectionGuard>,
 ) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send {
+    create_logged_passthrough_stream_with_trace(
+        stream,
+        tag,
+        usage_collector,
+        timeout_config,
+        connection_guard,
+        None,
+    )
+}
+
+struct DiagnosticStreamTrace {
+    trace_id: String,
+    provider_id: String,
+    response_model: String,
+    status_code: u16,
+    start_time: std::time::Instant,
+}
+
+struct DiagnosticStreamFinishGuard {
+    trace: Option<DiagnosticStreamTrace>,
+}
+
+impl DiagnosticStreamFinishGuard {
+    fn new(trace: Option<DiagnosticStreamTrace>) -> Self {
+        Self { trace }
+    }
+
+    fn as_ref(&self) -> Option<&DiagnosticStreamTrace> {
+        self.trace.as_ref()
+    }
+
+    fn take(&mut self) -> Option<DiagnosticStreamTrace> {
+        self.trace.take()
+    }
+
+    fn is_some(&self) -> bool {
+        self.trace.is_some()
+    }
+}
+
+impl Drop for DiagnosticStreamFinishGuard {
+    fn drop(&mut self) {
+        if let Some(trace) = self.trace.take() {
+            crate::diagnostic_logs::complete_trace(
+                &trace.trace_id,
+                None,
+                Some(trace.response_model),
+                Some(trace.provider_id),
+                Some(trace.status_code),
+                trace.start_time.elapsed().as_millis() as u64,
+                "cancelled",
+            );
+        }
+    }
+}
+
+fn create_logged_passthrough_stream_with_trace(
+    stream: impl Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static,
+    tag: &'static str,
+    usage_collector: Option<SseUsageCollector>,
+    timeout_config: StreamingTimeoutConfig,
+    connection_guard: Option<ActiveConnectionGuard>,
+    diagnostic: Option<DiagnosticStreamTrace>,
+) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send {
     async_stream::stream! {
         let _conn_guard = connection_guard;
         let mut buffer = String::new();
         let mut utf8_remainder: Vec<u8> = Vec::new();
         let mut collector = usage_collector;
+        let mut diagnostic = DiagnosticStreamFinishGuard::new(diagnostic);
         let mut finish_guard = collector.clone().map(SseUsageFinishGuard::new);
         let inspect_sse_events =
-            collector.is_some() || log::log_enabled!(log::Level::Debug);
+            collector.is_some() || diagnostic.is_some() || log::log_enabled!(log::Level::Debug);
         let mut is_first_chunk = true;
 
         // 超时配置
@@ -723,6 +843,29 @@ pub fn create_logged_passthrough_stream(
                             // 超时
                             let timeout_type = if is_first_chunk { "首字节" } else { "静默期" };
                             log::error!("[{tag}] 流式响应{}超时 ({}秒)", timeout_type, duration.as_secs());
+                            if let Some(trace) = diagnostic.take() {
+                                let duration_ms = trace.start_time.elapsed().as_millis() as u64;
+                                crate::diagnostic_logs::record_trace_event(crate::diagnostic_logs::TraceEventInput {
+                                    trace_id: trace.trace_id.clone(),
+                                    offset_ms: duration_ms,
+                                    stage: "stream".to_string(),
+                                    kind: "timeout".to_string(),
+                                    attempt_no: None,
+                                    provider_id: Some(trace.provider_id.clone()),
+                                    status_code: Some(trace.status_code),
+                                    summary: Some(format!("Streaming {timeout_type} timeout")),
+                                    payload: None,
+                                });
+                                crate::diagnostic_logs::complete_trace(
+                                    &trace.trace_id,
+                                    None,
+                                    Some(trace.response_model),
+                                    Some(trace.provider_id),
+                                    Some(trace.status_code),
+                                    duration_ms,
+                                    "error",
+                                );
+                            }
                             yield Err(std::io::Error::other(format!("流式响应{timeout_type}超时")));
                             break;
                         }
@@ -750,24 +893,57 @@ pub fn create_logged_passthrough_stream(
                                 for line in event_text.lines() {
                                     if let Some(data) = strip_sse_field(line, "data") {
                                         if data.trim() != "[DONE]" {
+                                            let parsed_data = serde_json::from_str::<Value>(data).ok();
                                             let collected = match &collector {
                                                 Some(c) if c.should_collect(data) => {
-                                                    match serde_json::from_str::<Value>(data) {
-                                                        Ok(json_value) => {
+                                                    match parsed_data.clone() {
+                                                        Some(json_value) => {
                                                             c.push(json_value).await;
                                                             true
                                                         }
-                                                        Err(_) => false,
+                                                        None => false,
                                                     }
                                                 }
                                                 _ => false,
                                             };
+                                            if let Some(trace) = diagnostic.as_ref() {
+                                                let kind = parsed_data
+                                                    .as_ref()
+                                                    .and_then(|value| value.get("type"))
+                                                    .and_then(Value::as_str)
+                                                    .unwrap_or("data")
+                                                    .to_string();
+                                                crate::diagnostic_logs::record_trace_event(crate::diagnostic_logs::TraceEventInput {
+                                                    trace_id: trace.trace_id.clone(),
+                                                    offset_ms: trace.start_time.elapsed().as_millis() as u64,
+                                                    stage: "stream".to_string(),
+                                                    kind,
+                                                    attempt_no: None,
+                                                    provider_id: Some(trace.provider_id.clone()),
+                                                    status_code: Some(trace.status_code),
+                                                    summary: Some(format!("SSE data ({} bytes)", data.len())),
+                                                    payload: Some(parsed_data.unwrap_or_else(|| Value::String(data.to_string()))),
+                                                });
+                                            }
                                             log::trace!(
                                                 "[{tag}] <<< SSE data: bytes={}, usage_collected={collected} (content omitted)",
                                                 data.len()
                                             );
                                         } else {
                                             log::debug!("[{tag}] <<< SSE: [DONE]");
+                                            if let Some(trace) = diagnostic.as_ref() {
+                                                crate::diagnostic_logs::record_trace_event(crate::diagnostic_logs::TraceEventInput {
+                                                    trace_id: trace.trace_id.clone(),
+                                                    offset_ms: trace.start_time.elapsed().as_millis() as u64,
+                                                    stage: "stream".to_string(),
+                                                    kind: "done".to_string(),
+                                                    attempt_no: None,
+                                                    provider_id: Some(trace.provider_id.clone()),
+                                                    status_code: Some(trace.status_code),
+                                                    summary: Some("SSE stream completed".to_string()),
+                                                    payload: Some(Value::String("[DONE]".to_string())),
+                                                });
+                                            }
                                         }
                                     }
                                 }
@@ -779,6 +955,29 @@ pub fn create_logged_passthrough_stream(
                 }
                 Some(Err(e)) => {
                     log::error!("[{tag}] 流错误: {e}");
+                    if let Some(trace) = diagnostic.take() {
+                        let duration_ms = trace.start_time.elapsed().as_millis() as u64;
+                        crate::diagnostic_logs::record_trace_event(crate::diagnostic_logs::TraceEventInput {
+                            trace_id: trace.trace_id.clone(),
+                            offset_ms: duration_ms,
+                            stage: "stream".to_string(),
+                            kind: "read_error".to_string(),
+                            attempt_no: None,
+                            provider_id: Some(trace.provider_id.clone()),
+                            status_code: Some(trace.status_code),
+                            summary: Some(e.to_string()),
+                            payload: None,
+                        });
+                        crate::diagnostic_logs::complete_trace(
+                            &trace.trace_id,
+                            None,
+                            Some(trace.response_model),
+                            Some(trace.provider_id),
+                            Some(trace.status_code),
+                            duration_ms,
+                            "error",
+                        );
+                    }
                     yield Err(std::io::Error::other(e.to_string()));
                     break;
                 }
@@ -794,6 +993,18 @@ pub fn create_logged_passthrough_stream(
         }
         if let Some(guard) = &mut finish_guard {
             guard.disarm();
+        }
+        if let Some(trace) = diagnostic.take() {
+            let duration_ms = trace.start_time.elapsed().as_millis() as u64;
+            crate::diagnostic_logs::complete_trace(
+                &trace.trace_id,
+                None,
+                Some(trace.response_model),
+                Some(trace.provider_id),
+                Some(trace.status_code),
+                duration_ms,
+                if (200..300).contains(&trace.status_code) { "success" } else { "error" },
+            );
         }
     }
 }

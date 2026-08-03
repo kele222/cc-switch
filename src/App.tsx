@@ -25,6 +25,7 @@ import {
   Shield,
   Cpu,
   LayoutDashboard,
+  ScrollText,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { Provider, VisibleApps } from "@/types";
@@ -94,10 +95,12 @@ import ToolsPanel from "@/components/openclaw/ToolsPanel";
 import AgentsDefaultsPanel from "@/components/openclaw/AgentsDefaultsPanel";
 import OpenClawHealthBanner from "@/components/openclaw/OpenClawHealthBanner";
 import HermesMemoryPanel from "@/components/hermes/HermesMemoryPanel";
+import { LogCenterPage } from "@/components/logs/LogCenterPage";
 
 type View =
   | "providers"
   | "settings"
+  | "logs"
   | "prompts"
   | "skills"
   | "skillsDiscovery"
@@ -144,6 +147,7 @@ const VIEW_STORAGE_KEY = "cc-switch-last-view";
 const VALID_VIEWS: View[] = [
   "providers",
   "settings",
+  "logs",
   "prompts",
   "skills",
   "skillsDiscovery",
@@ -901,6 +905,8 @@ function App() {
               defaultTab={settingsDefaultTab}
             />
           );
+        case "logs":
+          return <LogCenterPage />;
         case "prompts":
           return (
             <PromptPanel
@@ -1168,6 +1174,7 @@ function App() {
                 </Button>
                 <h1 className="text-lg font-semibold">
                   {currentView === "settings" && t("settings.title")}
+                  {currentView === "logs" && t("logs.title")}
                   {currentView === "prompts" &&
                     t("prompts.title", {
                       appName: t(`apps.${sharedFeatureApp}`),
@@ -1217,6 +1224,15 @@ function App() {
                   className="hover:bg-black/5 dark:hover:bg-white/5"
                 >
                   <Settings className="w-4 h-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setCurrentView("logs")}
+                  title={t("logs.title")}
+                  className="hover:bg-black/5 dark:hover:bg-white/5"
+                >
+                  <ScrollText className="w-4 h-4" />
                 </Button>
                 <UpdateBadge
                   onClick={() => {

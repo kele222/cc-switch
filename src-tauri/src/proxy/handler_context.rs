@@ -70,6 +70,8 @@ pub struct RequestContext {
     pub optimizer_config: OptimizerConfig,
     /// Copilot 优化器配置
     pub copilot_optimizer_config: CopilotOptimizerConfig,
+    /// Structured diagnostic trace identifier for this proxy request.
+    pub trace_id: Option<String>,
 }
 
 impl RequestContext {
@@ -173,7 +175,29 @@ impl RequestContext {
             rectifier_config,
             optimizer_config,
             copilot_optimizer_config,
+            trace_id: None,
         })
+    }
+
+    pub fn start_diagnostic_trace(
+        &mut self,
+        method: &http::Method,
+        path: &str,
+        is_streaming: bool,
+        headers: &HeaderMap,
+        body: &serde_json::Value,
+    ) {
+        let safe_path = path.split('?').next().unwrap_or(path).to_string();
+        self.trace_id = crate::diagnostic_logs::begin_trace(crate::diagnostic_logs::BeginTrace {
+            app_type: self.app_type_str.to_string(),
+            method: method.as_str().to_string(),
+            path: safe_path,
+            request_model: Some(self.request_model.clone()),
+            provider_id: Some(self.provider.id.clone()),
+            is_streaming,
+            headers: crate::diagnostic_logs::redact_headers(headers),
+            body: crate::diagnostic_logs::redact_value(body),
+        });
     }
 
     /// 从 URI 提取模型名称（Gemini 专用）
@@ -241,6 +265,7 @@ impl RequestContext {
             self.optimizer_config.clone(),
             self.copilot_optimizer_config.clone(),
             max_retries,
+            self.trace_id.clone(),
         )
     }
 
