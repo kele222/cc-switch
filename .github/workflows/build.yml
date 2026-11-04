@@ -31,13 +31,7 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
-      - name: Upgrade Rust backend dependencies to match frontend
-        run: |
-          cargo add tauri@2.11 --manifest-path src-tauri/Cargo.toml
-          cargo add tauri-plugin-dialog@2.7 --manifest-path src-tauri/Cargo.toml
-          cargo add tauri-plugin-log@2.8 --manifest-path src-tauri/Cargo.toml
-          cargo add tauri-plugin-process@2.3 --manifest-path src-tauri/Cargo.toml
-          cargo add tauri-plugin-updater@2.10 --manifest-path src-tauri/Cargo.toml
+      # 删除了 cargo add 步骤
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -47,11 +41,9 @@ jobs:
       - name: Build Frontend (Vite/React)
         run: pnpm run build || pnpm run build:web || pnpm run build:renderer
 
-      # 【核弹级修复 1】：使用 PowerShell 暴力清空所有 JSON 和 Rust 代码里的 pubkey
       - name: Nuke all pubkey configs
         shell: pwsh
         run: |
-          # 1. 暴力替换 tauri.conf.json 里的 pubkey 和 updater 配置
           $jsonPath = "src-tauri/tauri.conf.json"
           if (Test-Path $jsonPath) {
             $content = Get-Content $jsonPath -Raw
@@ -61,7 +53,6 @@ jobs:
             Set-Content $jsonPath $content -Force
           }
           
-          # 2. 暴力替换 Rust 源码里可能写死的 .pubkey("...")
           Get-ChildItem -Path src-tauri/src -Recurse -Filter *.rs -ErrorAction SilentlyContinue | ForEach-Object {
             $rsContent = Get-Content $_.FullName -Raw
             $rsContent = $rsContent -replace '\.pubkey\("[^"]*"\)', ''
@@ -71,8 +62,6 @@ jobs:
       - name: Build Tauri Backend (Rust)
         run: pnpm tauri build
 
-      # 【核弹级修复 2】：将 if: success() 改为 if: always()
-      # 这意味着：只要 exe 生成了，哪怕最后一步又抽风报错，也强制把文件上传给你！
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
