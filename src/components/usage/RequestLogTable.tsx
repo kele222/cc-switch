@@ -491,6 +491,23 @@ export function RequestLogTable({
           {formatTokensCompact(log.outputTokens, locale)}
         </td>
       ),
+      reasoning: (
+        <td
+          className={cn(
+            usageTable.td,
+            log.reasoningTokens == null && usageTable.muted,
+          )}
+          title={
+            log.reasoningTokens == null
+              ? undefined
+              : fmtInt(log.reasoningTokens, locale)
+          }
+        >
+          {log.reasoningTokens == null
+            ? "—"
+            : formatTokensCompact(log.reasoningTokens, locale)}
+        </td>
+      ),
       cacheRead: (
         <td
           className={cn(usageTable.td, !hasCache && usageTable.muted)}

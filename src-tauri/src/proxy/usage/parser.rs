@@ -40,6 +40,22 @@ fn openai_cache_write_tokens(usage: &Value) -> u32 {
         .unwrap_or(0) as u32
 }
 
+/// 推理是输出的细分；保留未上报与明确为零的区别，不额外计费。
+pub(crate) fn reasoning_tokens(usage: &Value) -> Option<u32> {
+    [
+        "/output_tokens_details/reasoning_tokens",
+        "/completion_tokens_details/reasoning_tokens",
+        "/output_tokens_details/thinking_tokens",
+        "/reasoning_output_tokens",
+        "/reasoning_tokens",
+        "/thinking_tokens",
+        "/thoughtsTokenCount",
+    ]
+    .iter()
+    .find_map(|path| usage.pointer(path).and_then(Value::as_u64))
+    .and_then(|tokens| u32::try_from(tokens).ok())
+}
+
 /// Claude usage 中按 1 小时 TTL 写入的缓存 token（`cache_creation_input_tokens` 的子集）
 pub(crate) fn claude_cache_creation_1h_tokens(usage: &Value) -> u32 {
     usage
@@ -73,6 +89,8 @@ fn response_id(body: &Value, field: &str) -> Option<String> {
 pub struct TokenUsage {
     pub input_tokens: u32,
     pub output_tokens: u32,
+    #[serde(default)]
+    pub reasoning_tokens: Option<u32>,
     pub cache_read_tokens: u32,
     pub cache_creation_tokens: u32,
     /// `cache_creation_tokens` 中按 1 小时 TTL 写入的部分（Claude 单独计价）
@@ -138,6 +156,7 @@ impl TokenUsage {
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0) as u32,
             cache_creation_1h_tokens: claude_cache_creation_1h_tokens(usage),
+            reasoning_tokens: reasoning_tokens(usage),
             model,
             message_id,
         })
@@ -168,6 +187,7 @@ impl TokenUsage {
                             }
                         }
                         if let Some(msg_usage) = event.get("message").and_then(|m| m.get("usage")) {
+                            usage.reasoning_tokens = reasoning_tokens(msg_usage);
                             // 从 message_start 获取 input_tokens（原生 Claude API）
                             if let Some(input) =
                                 msg_usage.get("input_tokens").and_then(|v| v.as_u64())
@@ -190,6 +210,8 @@ impl TokenUsage {
                     }
                     "message_delta" => {
                         if let Some(delta_usage) = event.get("usage") {
+                            usage.reasoning_tokens =
+                                reasoning_tokens(delta_usage).or(usage.reasoning_tokens);
                             // 从 message_delta 获取 output_tokens
                             if let Some(output) =
                                 delta_usage.get("output_tokens").and_then(|v| v.as_u64())
@@ -300,6 +322,7 @@ impl TokenUsage {
         Some(Self {
             input_tokens: input_tokens? as u32,
             output_tokens: output_tokens? as u32,
+            reasoning_tokens: reasoning_tokens(usage),
             cache_read_tokens: cached_tokens,
             cache_creation_tokens: cache_write_tokens,
             cache_creation_1h_tokens: 0,
@@ -393,6 +416,7 @@ impl TokenUsage {
         Some(Self {
             input_tokens: prompt_tokens as u32,
             output_tokens: completion_tokens as u32,
+            reasoning_tokens: reasoning_tokens(usage),
             cache_read_tokens: cached_tokens,
             cache_creation_tokens: cache_write_tokens,
             cache_creation_1h_tokens: 0,
@@ -441,6 +465,7 @@ impl TokenUsage {
         Some(Self {
             input_tokens: prompt_tokens,
             output_tokens,
+            reasoning_tokens: reasoning_tokens(usage),
             cache_read_tokens: usage
                 .get("cachedContentTokenCount")
                 .and_then(|v| v.as_u64())
@@ -458,11 +483,13 @@ impl TokenUsage {
         let mut total_input = 0u32;
         let mut total_tokens = 0u32;
         let mut total_cache_read = 0u32;
+        let mut total_reasoning = None;
         let mut model: Option<String> = None;
         let mut message_id: Option<String> = None;
 
         for chunk in chunks {
             if let Some(usage) = chunk.get("usageMetadata") {
+                total_reasoning = reasoning_tokens(usage).or(total_reasoning);
                 // 输入 tokens (通常在所有 chunk 中保持不变)
                 total_input = usage
                     .get("promptTokenCount")
@@ -500,6 +527,7 @@ impl TokenUsage {
             Some(Self {
                 input_tokens: total_input,
                 output_tokens: total_output,
+                reasoning_tokens: total_reasoning,
                 cache_read_tokens: total_cache_read,
                 cache_creation_tokens: 0,
                 cache_creation_1h_tokens: 0,
@@ -516,6 +544,73 @@ impl TokenUsage {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn parses_reasoning_breakdown_without_adding_to_output() {
+        for expected in [None, Some(0), Some(120)] {
+            let mut response = json!({
+                "usage": { "input_tokens": 100, "output_tokens": 200 }
+            });
+            if let Some(tokens) = expected {
+                response["usage"]["output_tokens_details"] = json!({ "reasoning_tokens": tokens });
+            }
+            let parsed = TokenUsage::from_codex_response(&response).unwrap();
+            assert_eq!(parsed.reasoning_tokens, expected);
+            assert_eq!(parsed.output_tokens, 200);
+            let events = [json!({ "type": "response.completed", "response": response })];
+            let streamed = TokenUsage::from_codex_stream_events_auto(&events).unwrap();
+            assert_eq!(streamed.reasoning_tokens, expected);
+        }
+
+        let chat = json!({
+            "usage": {
+                "prompt_tokens": 100, "completion_tokens": 200,
+                "completion_tokens_details": { "reasoning_tokens": 120 }
+            }
+        });
+        assert_eq!(
+            TokenUsage::from_openai_response(&chat).unwrap().reasoning_tokens,
+            Some(120)
+        );
+        assert_eq!(
+            TokenUsage::from_openai_stream_events(&[chat])
+                .unwrap()
+                .reasoning_tokens,
+            Some(120)
+        );
+
+        let gemini = json!({ "usageMetadata": {
+            "promptTokenCount": 100, "totalTokenCount": 300, "thoughtsTokenCount": 120
+        }});
+        let parsed = TokenUsage::from_gemini_response(&gemini).unwrap();
+        assert_eq!(parsed.reasoning_tokens, Some(120));
+        assert_eq!(parsed.output_tokens, 200);
+        assert_eq!(
+            TokenUsage::from_gemini_stream_chunks(&[gemini])
+                .unwrap()
+                .reasoning_tokens,
+            Some(120)
+        );
+
+        let claude = json!({ "usage": {
+            "input_tokens": 100, "output_tokens": 200,
+            "output_tokens_details": { "thinking_tokens": 120 }
+        }});
+        assert_eq!(
+            TokenUsage::from_claude_response(&claude).unwrap().reasoning_tokens,
+            Some(120)
+        );
+        let events = [
+            json!({ "type": "message_start", "message": claude }),
+            json!({ "type": "message_delta", "usage": { "output_tokens": 200 }}),
+        ];
+        assert_eq!(
+            TokenUsage::from_claude_stream_events(&events)
+                .unwrap()
+                .reasoning_tokens,
+            Some(120)
+        );
+    }
 
     #[test]
     fn response_ids_produce_scoped_dedup_keys_and_empty_ids_fall_back() {

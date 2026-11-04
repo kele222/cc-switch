@@ -55,6 +55,7 @@ struct CumulativeTokens {
     cached_input: u64,
     cache_write_input: u64,
     output: u64,
+    reasoning: Option<u64>,
 }
 
 /// 单次 API 调用的 token 增量
@@ -64,6 +65,7 @@ struct DeltaTokens {
     cached_input: u32,
     cache_write_input: u32,
     output: u32,
+    reasoning: Option<u32>,
 }
 
 impl DeltaTokens {
@@ -899,6 +901,9 @@ fn compute_delta(prev: &Option<CumulativeTokens>, current: &CumulativeTokens) ->
             cached_input: current.cached_input as u32,
             cache_write_input: current.cache_write_input as u32,
             output: current.output as u32,
+            reasoning: current
+                .reasoning
+                .and_then(|tokens| u32::try_from(tokens).ok()),
         },
         Some(p) => DeltaTokens {
             input: current.input.saturating_sub(p.input) as u32,
@@ -907,6 +912,12 @@ fn compute_delta(prev: &Option<CumulativeTokens>, current: &CumulativeTokens) ->
                 .cache_write_input
                 .saturating_sub(p.cache_write_input) as u32,
             output: current.output.saturating_sub(p.output) as u32,
+            reasoning: current
+                .reasoning
+                .zip(p.reasoning)
+                .and_then(|(current, previous)| {
+                    u32::try_from(current.saturating_sub(previous)).ok()
+                }),
         },
     }
 }
@@ -931,6 +942,7 @@ fn delta_from_usage(usage: &CumulativeTokens) -> DeltaTokens {
         cached_input,
         cache_write_input: (usage.cache_write_input.min(u32::MAX as u64) as u32).min(fresh_input),
         output: usage.output.min(u32::MAX as u64) as u32,
+        reasoning: usage.reasoning.and_then(|tokens| u32::try_from(tokens).ok()),
     }
 }
 
@@ -941,7 +953,7 @@ fn signature_for_last_usage(usage: &CumulativeTokens) -> TokenUsageSignature {
             input: Some(usage.input),
             cached_input: Some(usage.cached_input),
             output: Some(usage.output),
-            reasoning_output: None,
+            reasoning_output: usage.reasoning,
             total: Some(usage.input.saturating_add(usage.output)),
         }),
     }
@@ -987,6 +999,10 @@ fn update_high_water(high_water: &mut CumulativeTokens, current: &CumulativeToke
     high_water.cached_input = high_water.cached_input.max(current.cached_input);
     high_water.cache_write_input = high_water.cache_write_input.max(current.cache_write_input);
     high_water.output = high_water.output.max(current.output);
+    high_water.reasoning = match (high_water.reasoning, current.reasoning) {
+        (Some(previous), Some(current)) => Some(previous.max(current)),
+        (_, current) => current,
+    };
 }
 
 /// 从 JSON Value 中提取累计 token 用量
@@ -1006,6 +1022,9 @@ fn parse_cumulative_tokens(total_usage: &serde_json::Value) -> Option<Cumulative
         return None;
     }
     Some(CumulativeTokens {
+        reasoning: total_usage
+            .get("reasoning_output_tokens")
+            .and_then(|value| value.as_u64()),
         input: total_usage
             .get("input_tokens")
             .and_then(|v| v.as_u64())
@@ -1513,6 +1532,7 @@ fn parse_codex_file_with_index(
                         cached_input: 0,
                         cache_write_input: 0,
                         output: 0,
+                        reasoning: None,
                     }
                 } else if let Some(last) = last {
                     // Codex provides the exact per-request usage. Prefer it to
@@ -1523,6 +1543,9 @@ fn parse_codex_file_with_index(
                         cached_input: last.cached_input as u32,
                         cache_write_input: last.cache_write_input as u32,
                         output: last.output as u32,
+                        reasoning: last
+                            .reasoning
+                            .and_then(|tokens| u32::try_from(tokens).ok()),
                     }
                 } else if let Some(total) = total.as_ref() {
                     if is_continuation && total_high_water.is_none() {
@@ -2468,6 +2491,7 @@ fn insert_codex_session_entry_on_conn(
     let usage = TokenUsage {
         input_tokens: delta.input,
         output_tokens: delta.output,
+        reasoning_tokens: delta.reasoning,
         cache_read_tokens: delta.cached_input,
         cache_creation_tokens: delta.cache_write_input,
         cache_creation_1h_tokens: 0,
@@ -2508,8 +2532,8 @@ fn insert_codex_session_entry_on_conn(
             input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd,
             latency_ms, first_token_ms, status_code, error_message, session_id,
             provider_type, is_streaming, cost_multiplier, created_at, data_source,
-            input_token_semantics
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
+            input_token_semantics, reasoning_tokens
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
         )
         .and_then(|mut stmt| stmt.execute(rusqlite::params![
                 request_id,
@@ -2537,6 +2561,7 @@ fn insert_codex_session_entry_on_conn(
                 created_at,
                 "codex_session",     // data_source
                 INPUT_TOKEN_SEMANTICS_TOTAL, // input_tokens 含缓存读写
+                delta.reasoning,
             ]))
         .map_err(|e| AppError::Database(format!("插入 Codex 会话日志失败: {e}")))?;
 
@@ -3439,6 +3464,7 @@ mod tests {
     fn test_delta_first_event() {
         let prev = None;
         let current = CumulativeTokens {
+            reasoning: None,
             input: 17934,
             cached_input: 9600,
             cache_write_input: 0,
@@ -3454,12 +3480,14 @@ mod tests {
     #[test]
     fn test_delta_subsequent_event() {
         let prev = Some(CumulativeTokens {
+            reasoning: None,
             input: 17934,
             cached_input: 9600,
             cache_write_input: 0,
             output: 454,
         });
         let current = CumulativeTokens {
+            reasoning: None,
             input: 36722,
             cached_input: 27904,
             cache_write_input: 0,
@@ -3474,6 +3502,7 @@ mod tests {
     #[test]
     fn test_delta_zero_at_task_boundary() {
         let prev = Some(CumulativeTokens {
+            reasoning: None,
             input: 58346,
             cached_input: 46976,
             cache_write_input: 0,
@@ -3481,6 +3510,7 @@ mod tests {
         });
         // task 边界：相同的累计值
         let current = CumulativeTokens {
+            reasoning: None,
             input: 58346,
             cached_input: 46976,
             cache_write_input: 0,
@@ -3494,12 +3524,14 @@ mod tests {
     fn test_delta_saturating_sub() {
         // 异常情况：当前值小于前值（不应发生，但需防护）
         let prev = Some(CumulativeTokens {
+            reasoning: None,
             input: 100,
             cached_input: 50,
             cache_write_input: 0,
             output: 30,
         });
         let current = CumulativeTokens {
+            reasoning: None,
             input: 80,
             cached_input: 40,
             cache_write_input: 0,
@@ -4161,6 +4193,41 @@ mod tests {
         assert_eq!(tokens.input, 17934);
         assert_eq!(tokens.cached_input, 9600);
         assert_eq!(tokens.output, 454);
+        assert_eq!(tokens.reasoning, Some(233));
+    }
+
+    #[test]
+    fn reasoning_delta_round_trips_without_changing_output() -> Result<(), AppError> {
+        let previous = parse_cumulative_tokens(&serde_json::json!({
+            "input_tokens": 100, "output_tokens": 20, "reasoning_output_tokens": 10
+        }));
+        let current = parse_cumulative_tokens(&serde_json::json!({
+            "input_tokens": 300, "output_tokens": 70, "reasoning_output_tokens": 40
+        }))
+        .unwrap();
+        let delta = compute_delta(&previous, &current);
+        assert_eq!(delta.reasoning, Some(30));
+        assert_eq!(delta.output, 50);
+        let db = Database::memory()?;
+        let mut suspected = 0;
+        assert!(insert_codex_session_entry(
+            &db,
+            "reasoning-delta",
+            &delta,
+            "gpt-5.4",
+            None,
+            None,
+            &mut suspected,
+        )?);
+        let detail = db.get_request_detail("reasoning-delta")?.unwrap();
+        assert_eq!(detail.reasoning_tokens, Some(30));
+        assert_eq!(detail.output_tokens, 50);
+        let unknown = CumulativeTokens {
+            reasoning: None,
+            ..previous.unwrap()
+        };
+        assert_eq!(compute_delta(&Some(unknown), &current).reasoning, None);
+        Ok(())
     }
 
     #[test]
@@ -5961,6 +6028,7 @@ mod tests {
             [("codex-session-dup", 0), ("codex-session-dup-write", 7)]
         {
             let delta = DeltaTokens {
+                reasoning: None,
                 input: 10,
                 cached_input: 1,
                 cache_write_input,
@@ -6013,6 +6081,7 @@ mod tests {
         }
 
         let delta = DeltaTokens {
+            reasoning: None,
             input: 1000,
             cached_input: 300,
             cache_write_input: 600,
@@ -6042,6 +6111,7 @@ mod tests {
     fn test_codex_session_duplicate_is_observed_but_still_inserted() -> Result<(), AppError> {
         let db = Database::memory()?;
         let delta = DeltaTokens {
+            reasoning: None,
             input: 10,
             cached_input: 1,
             cache_write_input: 0,
@@ -6204,12 +6274,14 @@ mod tests {
     fn test_cached_clamped_to_input() {
         // cached > input 的异常场景应被 min() 钳制
         let prev = Some(CumulativeTokens {
+            reasoning: None,
             input: 100,
             cached_input: 0,
             cache_write_input: 0,
             output: 50,
         });
         let current = CumulativeTokens {
+            reasoning: None,
             input: 110,       // delta = 10
             cached_input: 80, // delta = 80（异常：大于 input delta）
             cache_write_input: 0,

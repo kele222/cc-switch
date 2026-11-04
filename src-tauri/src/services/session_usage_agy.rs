@@ -80,6 +80,7 @@ fn costs(conn: &rusqlite::Connection, model: &str, tokens: [i64; 4]) -> [String;
     let [input, output, cache_read, cache_write] =
         tokens.map(|v| u32::try_from(v).unwrap_or(u32::MAX));
     let usage = TokenUsage {
+        reasoning_tokens: None,
         input_tokens: input,
         output_tokens: output,
         cache_read_tokens: cache_read,
@@ -185,6 +186,9 @@ fn import_records(
         };
         let input = token("input_tokens");
         let output = token("output_tokens");
+        let reasoning = row["reasoning_tokens"]
+            .as_u64()
+            .and_then(|tokens| u32::try_from(tokens).ok());
         let cache = token("cache_read_tokens");
         let write = token("cache_write_tokens");
         if input == 0 && output == 0 && cache == 0 && write == 0 {
@@ -222,7 +226,7 @@ fn import_records(
             // A rewritten completed step may correct counters; update retained detail only.
             // If retention already removed it, its tombstone still forbids resurrection.
             // Timing is only ever filled in: an unreadable native database keeps what was stored.
-            let changed = tx.execute("UPDATE proxy_request_logs SET model=?2,request_model=?7,input_tokens=?3,output_tokens=?4,cache_read_tokens=?5,cache_creation_tokens=?6,input_cost_usd=?8,output_cost_usd=?9,cache_read_cost_usd=?10,cache_creation_cost_usd=?11,total_cost_usd=?12,latency_ms=CASE WHEN ?13>0 THEN ?13 ELSE latency_ms END,first_token_ms=COALESCE(?14,first_token_ms) WHERE request_id=?1 AND (model!=?2 OR request_model!=?7 OR input_tokens!=?3 OR output_tokens!=?4 OR cache_read_tokens!=?5 OR cache_creation_tokens!=?6 OR total_cost_usd!=?12 OR (?13>0 AND latency_ms!=?13) OR (?14 IS NOT NULL AND first_token_ms IS NOT ?14))", params![id,model,input,output,cache,write,display,input_cost,output_cost,cache_cost,write_cost,total_cost,latency_ms,first_token_ms])?;
+            let changed = tx.execute("UPDATE proxy_request_logs SET model=?2,request_model=?7,input_tokens=?3,output_tokens=?4,reasoning_tokens=?15,cache_read_tokens=?5,cache_creation_tokens=?6,input_cost_usd=?8,output_cost_usd=?9,cache_read_cost_usd=?10,cache_creation_cost_usd=?11,total_cost_usd=?12,latency_ms=CASE WHEN ?13>0 THEN ?13 ELSE latency_ms END,first_token_ms=COALESCE(?14,first_token_ms) WHERE request_id=?1 AND (model!=?2 OR request_model!=?7 OR input_tokens!=?3 OR output_tokens!=?4 OR reasoning_tokens IS NOT ?15 OR cache_read_tokens!=?5 OR cache_creation_tokens!=?6 OR total_cost_usd!=?12 OR (?13>0 AND latency_ms!=?13) OR (?14 IS NOT NULL AND first_token_ms IS NOT ?14))", params![id,model,input,output,cache,write,display,input_cost,output_cost,cache_cost,write_cost,total_cost,latency_ms,first_token_ms,reasoning])?;
             imported += changed as u32;
             skipped += u32::from(changed == 0);
             continue;
@@ -234,9 +238,9 @@ fn import_records(
             request_id,provider_id,app_type,model,request_model,input_tokens,output_tokens,
             cache_read_tokens,cache_creation_tokens,input_cost_usd,output_cost_usd,
             cache_read_cost_usd,cache_creation_cost_usd,total_cost_usd,latency_ms,first_token_ms,status_code,
-            session_id,provider_type,is_streaming,cost_multiplier,created_at,data_source,input_token_semantics
-        ) VALUES (?1,'_agy_session','agy',?2,?10,?3,?4,?5,?6,?11,?12,?13,?14,?15,?16,?17,200,?7,'agy_session',1,'1',?8,'agy_session',?9)",
-        params![id, model, input, output, cache, write, session, agy::timestamp(row).unwrap_or(0)/1000, INPUT_TOKEN_SEMANTICS_FRESH, display, input_cost, output_cost, cache_cost, write_cost, total_cost, latency_ms, first_token_ms])?;
+            session_id,provider_type,is_streaming,cost_multiplier,created_at,data_source,input_token_semantics,reasoning_tokens
+        ) VALUES (?1,'_agy_session','agy',?2,?10,?3,?4,?5,?6,?11,?12,?13,?14,?15,?16,?17,200,?7,'agy_session',1,'1',?8,'agy_session',?9,?18)",
+        params![id, model, input, output, cache, write, session, agy::timestamp(row).unwrap_or(0)/1000, INPUT_TOKEN_SEMANTICS_FRESH, display, input_cost, output_cost, cache_cost, write_cost, total_cost, latency_ms, first_token_ms, reasoning])?;
         imported += 1;
     }
     tx.commit()?;

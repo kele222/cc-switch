@@ -2272,6 +2272,7 @@
     "billingModel": "Billing Model",
     "inputTokens": "Input",
     "outputTokens": "Output",
+    "reasoningTokens": "Reasoning",
     "cacheReadTokens": "Cache Hit",
     "cacheCreationTokens": "Cache Creation",
     "timingInfo": "Duration/TTFT",

@@ -146,6 +146,7 @@ struct PiUsageRecord {
     request_model: String,
     input_tokens: u32,
     output_tokens: u32,
+    reasoning_tokens: Option<u32>,
     cache_read_tokens: u32,
     cache_write_tokens: u32,
     costs: PiCosts,
@@ -871,6 +872,11 @@ fn parse_usage_record(
         });
     let input_tokens = token_count(usage_value, "input");
     let output_tokens = token_count(usage_value, "output");
+    let reasoning_tokens = usage_value
+        .get("reasoningTokens")
+        .or_else(|| usage_value.get("reasoning"))
+        .and_then(Value::as_u64)
+        .and_then(|tokens| u32::try_from(tokens).ok());
     let cache_read_tokens = token_count(usage_value, "cacheRead");
     let cache_write_tokens = token_count(usage_value, "cacheWrite");
     let costs = parse_costs(usage_value.get("cost"));
@@ -972,6 +978,7 @@ fn parse_usage_record(
         request_model,
         input_tokens,
         output_tokens,
+        reasoning_tokens,
         cache_read_tokens,
         cache_write_tokens,
         costs,
@@ -1221,6 +1228,7 @@ fn insert_pi_record(
     .map_err(|error| ledger_error("写入", error))?;
 
     let usage = TokenUsage {
+        reasoning_tokens: record.reasoning_tokens,
         input_tokens: record.input_tokens,
         output_tokens: record.output_tokens,
         cache_read_tokens: record.cache_read_tokens,
@@ -1259,10 +1267,10 @@ fn insert_pi_record(
             input_cost_usd, output_cost_usd, cache_read_cost_usd,
             cache_creation_cost_usd, total_cost_usd,
             latency_ms, first_token_ms, status_code, error_message, session_id,
-            provider_type, is_streaming, cost_multiplier, created_at, data_source
+            provider_type, is_streaming, cost_multiplier, created_at, data_source, reasoning_tokens
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26
+            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27
         )",
         rusqlite::params![
             record.request_id,
@@ -1291,6 +1299,7 @@ fn insert_pi_record(
             "1.0",
             record.created_at,
             flavor.data_source,
+            record.reasoning_tokens,
         ],
     )
     .map(|changed| changed > 0)
@@ -1797,6 +1806,13 @@ mod tests {
                 },
             )?;
             assert_eq!(totals, (5, 37, 37, 12, 11));
+            let reasoning: Option<u32> = conn.query_row(
+                "SELECT reasoning_tokens FROM proxy_request_logs
+                 WHERE provider_id = 'custom-pi' AND status_code = 200",
+                [],
+                |row| row.get(0),
+            )?;
+            assert_eq!(reasoning, Some(3));
 
             let assistant: (String, String, String, String, i64, i64, String) = conn.query_row(
                 "SELECT provider_id, model, request_model, pricing_model, created_at,

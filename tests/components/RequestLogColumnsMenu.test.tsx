@@ -5,6 +5,27 @@ import { RequestLogColumnsMenu } from "@/components/usage/RequestLogColumnsMenu"
 
 // 「显示的列」在请求日志的表格工具栏里
 describe("RequestLogColumnsMenu", () => {
+  it("shows reasoning by default and saves its visibility", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn().mockResolvedValue(true);
+    render(
+      <RequestLogColumnsMenu value={{ currency: "CNY" }} onChange={onChange} />,
+    );
+    await user.click(
+      screen.getByRole("button", { name: "usage.display.logColumns" }),
+    );
+    const reasoning = await screen.findByRole("menuitemcheckbox", {
+      name: "usage.reasoningTokens",
+    });
+    expect(reasoning).toHaveAttribute("aria-checked", "true");
+    await user.click(reasoning);
+    expect(onChange).toHaveBeenLastCalledWith({
+      currency: "CNY",
+      requestLogColumns: { reasoning: false },
+    });
+    expect(reasoning).toHaveAttribute("aria-checked", "false");
+  });
+
   it("shows and hides request log columns", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn().mockResolvedValue(true);

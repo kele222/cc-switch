@@ -19,6 +19,8 @@ export interface RequestLog {
   costMultiplier: string;
   inputTokens: number;
   outputTokens: number;
+  /** 输出中的推理 Token；未上报或历史记录为 null/undefined。 */
+  reasoningTokens?: number | null;
   cacheReadTokens: number;
   cacheCreationTokens: number;
   inputCostUsd: string;

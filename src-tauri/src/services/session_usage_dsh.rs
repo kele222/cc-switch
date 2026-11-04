@@ -575,6 +575,7 @@ fn parse_assistant_message(
         request_id: format!("dsh:{message_id}"),
         model: model.to_owned(),
         usage: TokenUsage {
+            reasoning_tokens: None,
             input_tokens,
             output_tokens,
             cache_read_tokens,

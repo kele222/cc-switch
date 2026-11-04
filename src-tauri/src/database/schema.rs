@@ -209,6 +209,7 @@ impl Database {
             request_model TEXT,
             pricing_model TEXT,
             input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
+            reasoning_tokens INTEGER,
             cache_read_tokens INTEGER NOT NULL DEFAULT 0, cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
             input_token_semantics INTEGER NOT NULL DEFAULT 0,
             input_cost_usd TEXT NOT NULL DEFAULT '0', output_cost_usd TEXT NOT NULL DEFAULT '0',
@@ -647,6 +648,17 @@ impl Database {
                             )?;
                         }
                         Self::set_user_version(conn, 24)?;
+                    }
+                    24 => {
+                        if Self::table_exists(conn, "proxy_request_logs")? {
+                            Self::add_column_if_missing(
+                                conn,
+                                "proxy_request_logs",
+                                "reasoning_tokens",
+                                "INTEGER",
+                            )?;
+                        }
+                        Self::set_user_version(conn, 25)?;
                     }
                     _ => {
                         return Err(AppError::Database(format!(
@@ -3939,6 +3951,26 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn migrate_v24_to_v25_preserves_unknown_reasoning_tokens() -> Result<(), AppError> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            "CREATE TABLE proxy_request_logs (request_id TEXT PRIMARY KEY);
+             INSERT INTO proxy_request_logs VALUES ('historical');",
+        )?;
+        Database::set_user_version(&conn, 24)?;
+        Database::apply_schema_migrations_on_conn(&conn)?;
+        let reasoning: Option<u32> = conn.query_row(
+            "SELECT reasoning_tokens FROM proxy_request_logs WHERE request_id = 'historical'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(reasoning, None);
+        assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
+        Database::apply_schema_migrations_on_conn(&conn)?;
+        Ok(())
+    }
 
     #[test]
     fn migrate_v23_to_v24_preserves_existing_session_cursors() -> Result<(), AppError> {

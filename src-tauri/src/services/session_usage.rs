@@ -1173,6 +1173,7 @@ fn session_costs(
     pricing_cache: &mut SessionPricingCache,
 ) -> [String; 5] {
     let usage = TokenUsage {
+        reasoning_tokens: None,
         input_tokens: msg.input_tokens,
         output_tokens: msg.output_tokens,
         cache_read_tokens: msg.cache_read_tokens,

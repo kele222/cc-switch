@@ -156,6 +156,7 @@ fn sync_file(
         };
         let tokens = |field| usage[field].as_u64().unwrap_or(0).min(u32::MAX as u64) as u32;
         let usage = TokenUsage {
+            reasoning_tokens: None,
             input_tokens: tokens("inputOther"),
             output_tokens: tokens("output"),
             cache_read_tokens: tokens("inputCacheRead"),

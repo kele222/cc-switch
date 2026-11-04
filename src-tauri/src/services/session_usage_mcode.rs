@@ -55,6 +55,7 @@ fn sync_from_database(
         };
         let model = model.as_str();
         let usage = TokenUsage {
+            reasoning_tokens: row.get(6)?,
             input_tokens: row.get(4)?,
             output_tokens: row.get::<_, u32>(5)?.saturating_add(row.get(6)?),
             cache_read_tokens: row.get(7)?,
@@ -81,12 +82,12 @@ fn sync_from_database(
                 input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
                 input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd,
                 total_cost_usd, latency_ms, status_code, session_id, provider_type,
-                is_streaming, cost_multiplier, created_at, data_source, input_token_semantics
+                is_streaming, cost_multiplier, created_at, data_source, input_token_semantics, reasoning_tokens
              ) VALUES (?1, '_mcode_session', 'mcode', ?2, ?2, ?3, ?4, ?5, ?6,
-                       '0', '0', '0', '0', ?7, 0, 200, ?8, 'mcode_session', 1, '1', ?9, 'mcode_session', ?10)",
+                       '0', '0', '0', '0', ?7, 0, 200, ?8, 'mcode_session', 1, '1', ?9, 'mcode_session', ?10, ?11)",
             params![request_id, model, usage.input_tokens, usage.output_tokens,
                 usage.cache_read_tokens, usage.cache_creation_tokens, cost, session_id,
-                ts / 1000, INPUT_TOKEN_SEMANTICS_FRESH],
+                ts / 1000, INPUT_TOKEN_SEMANTICS_FRESH, usage.reasoning_tokens],
         )?;
         result.imported += changed as u32;
         result.skipped += u32::from(changed == 0);

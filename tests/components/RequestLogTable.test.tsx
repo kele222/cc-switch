@@ -420,10 +420,73 @@ describe("RequestLogTable optional columns", () => {
     const headers = screen
       .getAllByRole("columnheader")
       .map((th) => th.textContent);
-    expect(headers).toHaveLength(10);
+    expect(headers).toHaveLength(11);
+    expect(headers.indexOf("usage.reasoningTokens")).toBe(
+      headers.indexOf("usage.outputTokens") + 1,
+    );
     expect(headers).not.toContain("usage.logColumns.hitRate");
-    expect(screen.getByText("usage.noData")).toHaveAttribute("colspan", "10");
+    expect(screen.getByText("usage.noData")).toHaveAttribute("colspan", "11");
   });
+
+  it.each([
+    [undefined, "—", undefined],
+    [null, "—", undefined],
+    [0, "0", "0"],
+    [1_234, "1,234", "1,234"],
+    [12_345, "12.3K", "12,345"],
+  ])(
+    "shows reported reasoning tokens %s without treating missing values as zero",
+    (reasoningTokens, text, title) => {
+      useRequestLogsMock.mockReturnValue({
+        data: {
+          data: [
+            {
+              ...base,
+              requestId: "reasoning",
+              model: "reasoning-model",
+              appType: "codex",
+              inputTokens: 100,
+              outputTokens: 2_000,
+              reasoningTokens,
+              cacheCreationTokens: 0,
+              cacheReadTokens: 0,
+              latencyMs: 1_000,
+              statusCode: 200,
+            },
+          ],
+          total: 1,
+          page: 0,
+          pageSize: 20,
+        },
+        isLoading: false,
+      });
+      const { rerender } = render(
+        <RequestLogTable range={{ preset: "today" }} refreshIntervalMs={0} />,
+      );
+      screen
+        .getByTitle("reasoning-model")
+        .setAttribute("data-request", "reasoning");
+      const cells = cellsOf("reasoning");
+      expect(cells("usage.reasoningTokens")).toHaveTextContent(text);
+      if (title == null) {
+        expect(cells("usage.reasoningTokens")).not.toHaveAttribute("title");
+      } else {
+        expect(cells("usage.reasoningTokens")).toHaveAttribute("title", title);
+      }
+      expect(cells("usage.outputTokens")).toHaveTextContent("2,000");
+
+      rerender(
+        <RequestLogTable
+          range={{ preset: "today" }}
+          refreshIntervalMs={0}
+          columns={allColumns.filter((id) => id !== "reasoning")}
+        />,
+      );
+      expect(
+        screen.queryByRole("columnheader", { name: "usage.reasoningTokens" }),
+      ).not.toBeInTheDocument();
+    },
+  );
 
   it("renders cache write, hit rate, total time and status code", () => {
     useRequestLogsMock.mockReturnValue({

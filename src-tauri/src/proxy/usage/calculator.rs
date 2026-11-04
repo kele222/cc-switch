@@ -153,6 +153,7 @@ mod tests {
     #[test]
     fn test_cost_calculation() {
         let usage = TokenUsage {
+            reasoning_tokens: None,
             input_tokens: 1000,
             output_tokens: 500,
             cache_read_tokens: 200,
@@ -222,6 +223,7 @@ mod tests {
     #[test]
     fn test_cost_calculation_for_cache_inclusive_app() {
         let usage = TokenUsage {
+            reasoning_tokens: None,
             input_tokens: 1000,
             output_tokens: 500,
             cache_read_tokens: 200,
@@ -250,6 +252,7 @@ mod tests {
     #[test]
     fn grokbuild_does_not_double_bill_cached_input() {
         let usage = TokenUsage {
+            reasoning_tokens: None,
             input_tokens: 1000,
             output_tokens: 0,
             cache_read_tokens: 600,
@@ -270,6 +273,7 @@ mod tests {
     #[test]
     fn test_cost_multiplier() {
         let usage = TokenUsage {
+            reasoning_tokens: None,
             input_tokens: 1000,
             output_tokens: 0,
             cache_read_tokens: 0,
@@ -293,6 +297,7 @@ mod tests {
     #[test]
     fn test_decimal_precision() {
         let usage = TokenUsage {
+            reasoning_tokens: None,
             input_tokens: 1,
             output_tokens: 1,
             cache_read_tokens: 1,

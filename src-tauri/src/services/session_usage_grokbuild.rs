@@ -71,6 +71,7 @@ const _: () = assert!(SETTLE_WINDOW_SECONDS < SESSION_PROXY_DEDUP_WINDOW_SECONDS
 struct GrokCounters {
     input: u64,
     output: u64,
+    reasoning: Option<u64>,
     cached: u64,
     api_ms: u64,
     model_calls: u64,
@@ -512,6 +513,7 @@ fn parse_grok_counters(value: &serde_json::Value) -> GrokCounters {
     GrokCounters {
         input: get("inputTokens"),
         output: get("outputTokens"),
+        reasoning: value.get("reasoningTokens").and_then(|value| value.as_u64()),
         cached: get("cachedReadTokens"),
         api_ms: get("apiDurationMs"),
         model_calls: get("modelCalls"),
@@ -551,6 +553,7 @@ fn insert_grok_session_entry(
 
     let clamp = |v: u64| v.min(u32::MAX as u64) as u32;
     let usage = TokenUsage {
+        reasoning_tokens: turn.reasoning.map(clamp),
         input_tokens: clamp(turn.input),
         output_tokens: clamp(turn.output),
         cache_read_tokens: clamp(turn.cached),
@@ -651,12 +654,13 @@ fn insert_grok_session_entry(
             input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd,
             latency_ms, first_token_ms, status_code, error_message, session_id,
             provider_type, is_streaming, cost_multiplier, created_at, data_source,
-            input_token_semantics
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
+            input_token_semantics, reasoning_tokens
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)
         ON CONFLICT(request_id) DO UPDATE SET
             model = excluded.model,
             input_tokens = excluded.input_tokens,
             output_tokens = excluded.output_tokens,
+            reasoning_tokens = excluded.reasoning_tokens,
             cache_read_tokens = excluded.cache_read_tokens,
             input_cost_usd = excluded.input_cost_usd,
             output_cost_usd = excluded.output_cost_usd,
@@ -667,6 +671,7 @@ fn insert_grok_session_entry(
         WHERE data_source = 'grok_session'
           AND (input_tokens != excluded.input_tokens
            OR output_tokens != excluded.output_tokens
+           OR reasoning_tokens IS NOT excluded.reasoning_tokens
            OR cache_read_tokens != excluded.cache_read_tokens
            OR latency_ms != excluded.latency_ms
            OR model != excluded.model)",
@@ -696,6 +701,7 @@ fn insert_grok_session_entry(
             created_at,
             "grok_session",      // data_source
             INPUT_TOKEN_SEMANTICS_TOTAL,
+            turn.reasoning.map(|tokens| tokens.min(u32::MAX as u64) as u32),
         ],
     )
     .map_err(|e| AppError::Database(format!("插入 Grok Build 会话日志失败: {e}")))?;
@@ -828,6 +834,7 @@ mod tests {
         assert_eq!(
             events[0].per_model[0].1,
             GrokCounters {
+                reasoning: None,
                 input: 16632,
                 output: 104,
                 cached: 0,

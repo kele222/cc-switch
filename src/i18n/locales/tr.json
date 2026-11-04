@@ -2244,6 +2244,7 @@
     "billingModel": "Faturalandırma Modeli",
     "inputTokens": "Girdi",
     "outputTokens": "Çıktı",
+    "reasoningTokens": "Akıl yürütme",
     "cacheReadTokens": "Önbellek İsabeti",
     "cacheCreationTokens": "Önbellek Oluşturma",
     "timingInfo": "Süre/TTFT",

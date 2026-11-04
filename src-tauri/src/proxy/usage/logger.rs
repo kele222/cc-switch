@@ -187,8 +187,8 @@ impl<'a> UsageLogger<'a> {
                 input_token_semantics,
                 input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd,
                 latency_ms, first_token_ms, status_code, error_message, session_id,
-                provider_type, is_streaming, cost_multiplier, created_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)"
+                provider_type, is_streaming, cost_multiplier, created_at, reasoning_tokens
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)"
         );
         let affected_rows = conn
             .execute(
@@ -219,6 +219,7 @@ impl<'a> UsageLogger<'a> {
                     log.is_streaming as i64,
                     log.cost_multiplier,
                     created_at,
+                    log.usage.reasoning_tokens,
                 ],
             )
             .map_err(|e| AppError::Database(format!("记录请求日志失败: {e}")))?;
@@ -456,6 +457,7 @@ mod tests {
             request_model: "gpt-5.6".to_string(),
             pricing_model: "gpt-5.6".to_string(),
             usage: TokenUsage {
+                reasoning_tokens: None,
                 input_tokens,
                 output_tokens: 5,
                 cache_read_tokens: 2,
@@ -477,6 +479,31 @@ mod tests {
     }
 
     #[test]
+    fn reasoning_tokens_round_trip_through_request_logs() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let logger = UsageLogger::new(&db);
+        for (id, reasoning) in [("unknown", None), ("zero", Some(0)), ("reported", Some(3))] {
+            let mut log = request_log(id, 100);
+            log.usage.reasoning_tokens = reasoning;
+            logger.log_request(&log)?;
+            let detail = db.get_request_detail(id)?.expect("request detail");
+            assert_eq!(detail.reasoning_tokens, reasoning);
+            assert_eq!(detail.output_tokens, 5);
+        }
+        let logs = db.get_request_logs(&Default::default(), 0, 20)?;
+        assert_eq!(logs.data.len(), 3);
+        assert_eq!(
+            logs.data
+                .iter()
+                .find(|log| log.request_id == "reported")
+                .unwrap()
+                .reasoning_tokens,
+            Some(3)
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_log_request() -> Result<(), AppError> {
         let db = Database::memory()?;
 
@@ -494,6 +521,7 @@ mod tests {
         let logger = UsageLogger::new(&db);
 
         let usage = TokenUsage {
+            reasoning_tokens: None,
             input_tokens: 1000,
             output_tokens: 500,
             cache_read_tokens: 0,
@@ -647,6 +675,7 @@ mod tests {
         }
 
         let usage = TokenUsage {
+            reasoning_tokens: None,
             input_tokens: 10,
             output_tokens: 5,
             cache_read_tokens: 2,

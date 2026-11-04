@@ -31,7 +31,7 @@ use std::time::SystemTime;
 struct OpenCodeMessageData {
     input_tokens: u32,
     output_tokens: u32,
-    reasoning_tokens: u32,
+    reasoning_tokens: Option<u32>,
     cache_read_tokens: u32,
     cache_write_tokens: u32,
     cost: f64,
@@ -350,7 +350,7 @@ fn parse_message_data(value: &serde_json::Value) -> Option<OpenCodeMessageData> 
     let reasoning_tokens = tokens
         .get("reasoning")
         .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u32;
+        .and_then(|tokens| u32::try_from(tokens).ok());
 
     let cache_obj = tokens.get("cache");
     let cache_read_tokens = cache_obj
@@ -365,7 +365,7 @@ fn parse_message_data(value: &serde_json::Value) -> Option<OpenCodeMessageData> 
     // 跳过全零 token 的消息
     if input_tokens == 0
         && output_tokens == 0
-        && reasoning_tokens == 0
+        && reasoning_tokens.unwrap_or(0) == 0
         && cache_read_tokens == 0
         && cache_write_tokens == 0
     {
@@ -446,7 +446,7 @@ fn insert_opencode_message(
 
     // OpenCode 使用 Anthropic 风格：input 是新鲜输入，cache 单独计
     // output 包含 reasoning tokens（按输出计费）
-    let output_with_reasoning = msg.output_tokens + msg.reasoning_tokens;
+    let output_with_reasoning = msg.output_tokens + msg.reasoning_tokens.unwrap_or(0);
 
     let dedup_key = DedupKey {
         app_type: "opencode",
@@ -477,6 +477,7 @@ fn insert_opencode_message(
         } else {
             // opencode 费用为 0（如免费模型），尝试用 cc-switch 自带的模型定价计算
             let usage = TokenUsage {
+                reasoning_tokens: msg.reasoning_tokens,
                 input_tokens: msg.input_tokens,
                 output_tokens: output_with_reasoning,
                 cache_read_tokens: msg.cache_read_tokens,
@@ -518,8 +519,8 @@ fn insert_opencode_message(
             input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
             input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd,
             latency_ms, first_token_ms, status_code, error_message, session_id,
-            provider_type, is_streaming, cost_multiplier, created_at, data_source
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
+            provider_type, is_streaming, cost_multiplier, created_at, data_source, reasoning_tokens
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
         rusqlite::params![
             request_id,
             "_opencode_session",   // provider_id
@@ -546,6 +547,7 @@ fn insert_opencode_message(
             "1.0",                 // cost_multiplier
             created_at,
             "opencode_session",    // data_source
+            msg.reasoning_tokens,
         ],
     )
     .map_err(|e| AppError::Database(format!("插入 OpenCode 会话日志失败: {e}")))?;
@@ -582,7 +584,12 @@ mod tests {
         let data = parse_message_data(&json).unwrap();
         assert_eq!(data.input_tokens, 3272);
         assert_eq!(data.output_tokens, 383);
-        assert_eq!(data.reasoning_tokens, 419);
+        assert_eq!(data.reasoning_tokens, Some(419));
+        let db = Database::memory().unwrap();
+        assert!(insert_opencode_message(&db, "reasoning", &data, "session").unwrap());
+        let detail = db.get_request_detail("reasoning").unwrap().unwrap();
+        assert_eq!(detail.reasoning_tokens, Some(419));
+        assert_eq!(detail.output_tokens, data.output_tokens + 419);
         assert_eq!(data.cache_read_tokens, 52480);
         assert_eq!(data.cache_write_tokens, 0);
         assert!((data.cost - 0.0023113).abs() < 1e-10);
@@ -640,7 +647,7 @@ mod tests {
         let data = parse_message_data(&json).unwrap();
         assert_eq!(data.input_tokens, 1000);
         assert_eq!(data.output_tokens, 200);
-        assert_eq!(data.reasoning_tokens, 0);
+        assert_eq!(data.reasoning_tokens, None);
         assert_eq!(data.cache_read_tokens, 0);
         assert_eq!(data.cache_write_tokens, 0);
         // 未完成消息（无 time.completed）没有可用耗时

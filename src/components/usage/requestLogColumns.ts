@@ -21,6 +21,7 @@ export const REQUEST_LOG_COLUMNS = [
     groupStart: true,
   },
   { id: "output", labelKey: "usage.outputTokens", defaultVisible: true },
+  { id: "reasoning", labelKey: "usage.reasoningTokens", defaultVisible: true },
   { id: "cacheRead", labelKey: "usage.cacheReadTokens", defaultVisible: true },
   {
     id: "cacheWrite",

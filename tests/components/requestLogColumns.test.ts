@@ -9,7 +9,7 @@ import {
 } from "@/components/usage/requestLogColumns";
 
 describe("request log columns", () => {
-  it("shows the ten original columns by default and hides the new ones", () => {
+  it("shows the default columns including reasoning tokens", () => {
     expect(resolveRequestLogColumns(undefined)).toEqual([
       "time",
       "app",
@@ -18,6 +18,7 @@ describe("request log columns", () => {
       "cost",
       "freshInput",
       "output",
+      "reasoning",
       "cacheRead",
       "speed",
       "firstToken",
@@ -39,6 +40,7 @@ describe("request log columns", () => {
       "cost",
       "freshInput",
       "output",
+      "reasoning",
       "cacheRead",
       "speed",
       "firstToken",

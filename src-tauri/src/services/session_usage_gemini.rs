@@ -35,7 +35,7 @@ struct GeminiTokens {
     input: u32,
     output: u32,
     cached: u32,
-    thoughts: u32,
+    thoughts: Option<u32>,
 }
 
 /// 同步 Gemini 使用数据（从 JSON 会话日志）
@@ -185,7 +185,11 @@ fn sync_single_gemini_file(
         };
 
         let tokens = parse_gemini_tokens(tokens_obj);
-        if tokens.input == 0 && tokens.output == 0 && tokens.thoughts == 0 && tokens.cached == 0 {
+        if tokens.input == 0
+            && tokens.output == 0
+            && tokens.thoughts.unwrap_or(0) == 0
+            && tokens.cached == 0
+        {
             continue; // 跳过全零的空 token 消息
         }
 
@@ -232,7 +236,10 @@ fn parse_gemini_tokens(tokens: &serde_json::Value) -> GeminiTokens {
         input: tokens.get("input").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
         output: tokens.get("output").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
         cached: tokens.get("cached").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-        thoughts: tokens.get("thoughts").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+        thoughts: tokens
+            .get("thoughts")
+            .and_then(|v| v.as_u64())
+            .and_then(|tokens| u32::try_from(tokens).ok()),
     }
 }
 
@@ -261,7 +268,7 @@ fn insert_gemini_session_entry(
         });
 
     // 合并 thoughts 到 output（思考 token 按输出计费）
-    let output_tokens = tokens.output + tokens.thoughts;
+    let output_tokens = tokens.output + tokens.thoughts.unwrap_or(0);
 
     let dedup_key = DedupKey {
         app_type: "gemini",
@@ -279,6 +286,7 @@ fn insert_gemini_session_entry(
 
     // 计算费用
     let usage = TokenUsage {
+        reasoning_tokens: tokens.thoughts,
         input_tokens: tokens.input,
         output_tokens,
         cache_read_tokens: tokens.cached,
@@ -318,12 +326,13 @@ fn insert_gemini_session_entry(
             input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
             input_cost_usd, output_cost_usd, cache_read_cost_usd, cache_creation_cost_usd, total_cost_usd,
             latency_ms, first_token_ms, status_code, error_message, session_id,
-            provider_type, is_streaming, cost_multiplier, created_at, data_source
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)
+            provider_type, is_streaming, cost_multiplier, created_at, data_source, reasoning_tokens
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
         ON CONFLICT(request_id) DO UPDATE SET
             model = excluded.model,
             input_tokens = excluded.input_tokens,
             output_tokens = excluded.output_tokens,
+            reasoning_tokens = excluded.reasoning_tokens,
             cache_read_tokens = excluded.cache_read_tokens,
             input_cost_usd = excluded.input_cost_usd,
             output_cost_usd = excluded.output_cost_usd,
@@ -332,6 +341,7 @@ fn insert_gemini_session_entry(
             total_cost_usd = excluded.total_cost_usd
         WHERE input_tokens != excluded.input_tokens
            OR output_tokens != excluded.output_tokens
+           OR reasoning_tokens IS NOT excluded.reasoning_tokens
            OR cache_read_tokens != excluded.cache_read_tokens
            OR model != excluded.model",
         rusqlite::params![
@@ -359,6 +369,7 @@ fn insert_gemini_session_entry(
             "1.0",               // cost_multiplier
             created_at,
             "gemini_session",    // data_source
+            tokens.thoughts,
         ],
     )
     .map_err(|e| AppError::Database(format!("插入 Gemini 会话日志失败: {e}")))?;
@@ -376,6 +387,26 @@ fn find_gemini_pricing(conn: &rusqlite::Connection, model_id: &str) -> Option<Mo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reasoning_tokens_preserve_missing_and_zero_on_import() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        for (id, thoughts) in [("unknown", None), ("zero", Some(0)), ("reported", Some(30))] {
+            let tokens = GeminiTokens {
+                input: 100,
+                output: 50,
+                cached: 0,
+                thoughts,
+            };
+            assert!(insert_gemini_session_entry(
+                &db, id, &tokens, "gemini-2.5-pro", None, None,
+            )?);
+            let detail = db.get_request_detail(id)?.unwrap();
+            assert_eq!(detail.reasoning_tokens, thoughts);
+            assert_eq!(detail.output_tokens, 50 + thoughts.unwrap_or(0));
+        }
+        Ok(())
+    }
 
     #[test]
     fn test_collect_gemini_session_files_nonexistent() {
@@ -417,7 +448,7 @@ mod tests {
             input: 10,
             output: 2,
             cached: 1,
-            thoughts: 5,
+            thoughts: Some(5),
         };
         let inserted = insert_gemini_session_entry(
             &db,
@@ -452,9 +483,9 @@ mod tests {
         assert_eq!(tokens.input, 8522);
         assert_eq!(tokens.output, 29);
         assert_eq!(tokens.cached, 3138);
-        assert_eq!(tokens.thoughts, 405);
+        assert_eq!(tokens.thoughts, Some(405));
         // output + thoughts = 29 + 405 = 434（用于计费）
-        assert_eq!(tokens.output + tokens.thoughts, 434);
+        assert_eq!(tokens.output + tokens.thoughts.unwrap_or(0), 434);
     }
 
     #[test]
@@ -468,7 +499,7 @@ mod tests {
         assert_eq!(tokens.input, 100);
         assert_eq!(tokens.output, 50);
         assert_eq!(tokens.cached, 0);
-        assert_eq!(tokens.thoughts, 0);
+        assert_eq!(tokens.thoughts, None);
     }
 
     #[test]
@@ -486,7 +517,10 @@ mod tests {
         assert_eq!(tokens.output, 0);
         // 全零（包括 cached=0）会被 sync 逻辑跳过
         assert!(
-            tokens.input == 0 && tokens.output == 0 && tokens.thoughts == 0 && tokens.cached == 0
+            tokens.input == 0
+                && tokens.output == 0
+                && tokens.thoughts.unwrap_or(0) == 0
+                && tokens.cached == 0
         );
     }
 
@@ -502,8 +536,10 @@ mod tests {
         let tokens = parse_gemini_tokens(&json);
         assert_eq!(tokens.cached, 5000);
         // 跳过条件：所有四个字段都为 0 才跳过
-        let should_skip =
-            tokens.input == 0 && tokens.output == 0 && tokens.thoughts == 0 && tokens.cached == 0;
+        let should_skip = tokens.input == 0
+            && tokens.output == 0
+            && tokens.thoughts.unwrap_or(0) == 0
+            && tokens.cached == 0;
         assert!(!should_skip, "纯缓存命中记录不应被跳过");
     }
 }
