@@ -60,7 +60,7 @@ jobs:
           }
 
       - name: Build Tauri Backend (Rust)
-        run: pnpm tauri build
+        run: pnpm tauri build --bundles portable
 
       - name: Upload artifacts
         if: always()
@@ -70,4 +70,5 @@ jobs:
           path: |
             src-tauri/target/release/bundle/nsis/*.exe
             src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/portable/*.exe
             src-tauri/target/release/cc-switch.exe
